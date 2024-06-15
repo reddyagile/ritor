@@ -1,38 +1,20 @@
-const INLINE_ELEMENTS = ['A', 'B', 'STRONG', 'I', 'EM', 'U', 'SPAN'];
+import { INLINE_ELEMENTS } from "./constants";
 
 export const domUtil = {
   hasClass(el: HTMLElement, className: string) {
-    if (el.classList) {
-      return el.classList.contains(className);
-    } else {
-      return !!el.className.match(new RegExp('(\\s|^)' + className + '(\\s|$)'));
-    }
+    return el.classList.contains(className);
   },
   addClass(el: HTMLElement, className: string) {
-    if (el.classList) {
-      el.classList.add(className);
-    } else if (!this.hasClass(el, className)) {
-      el.className += ' ' + className;
-    }
+    el.classList.add(className);
   },
   removeClass(el: HTMLElement, className: string) {
-    if (el.classList) {
-      el.classList.remove(className);
-    } else if (this.hasClass(el, className)) {
-      var reg = new RegExp('(\\s|^)' + className + '(\\s|$)');
-      el.className = el.className.replace(reg, '');
-    }
+    el.classList.remove(className);
   },
   toggleClass(el: HTMLElement, className: string) {
-    if (this.hasClass(el, className)) {
-      this.removeClass(el, className);
-    } else {
-      this.addClass(el, className);
-    }
+    el.classList.toggle(className);
   },
-
   isInlineElement(tagName: string) {
-    return INLINE_ELEMENTS.indexOf(tagName) > -1;
+    return INLINE_ELEMENTS.has(tagName.toLowerCase());
   },
 };
 

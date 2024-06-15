@@ -11,7 +11,7 @@ class ClearFormat extends BaseModule {
 
   click() {
     const content = this.ritor.getContent();
-    content?.clearFormat();
+    content?.removeFormatting();
   }
 }
 

@@ -32,22 +32,19 @@ class Ritor extends EventEmitter {
     this.options.modules = Object.assign(
       {},
       isObject(this.options.modules) ? this.options.modules : {},
-      this.registerDefaultModules(),
+      this.initializeDefaultModules(),
     );
-    this.initModules();
+    this.initializeModules();
     this.init();
     this.initialized = true;
     this.emit('editor:init');
   }
 
-  private registerDefaultModules() {
+  private initializeDefaultModules() {
     const config: { [key: string]: {} } = {};
-    for (const key in defaultModules) {
-      if (Object.prototype.hasOwnProperty.call(defaultModules, key)) {
-        const module = defaultModules[key];
-        Ritor.register(key, module);
-        config[key] = {};
-      }
+    for (const [key, module] of Object.entries(defaultModules)) {
+      Ritor.register(key, module);
+      config[key] = {};
     }
     return config;
   }
@@ -78,7 +75,7 @@ class Ritor extends EventEmitter {
     }
   }
 
-  private initModules() {
+  private initializeModules() {
     const modules = this.options.modules;
     modules &&
       Object.keys(modules).forEach((moduleName) => {
@@ -112,7 +109,7 @@ class Ritor extends EventEmitter {
 
   public reInit() {
     if (!this.initialized) {
-      this.initModules();
+      this.initializeModules();
       this.init();
     }
   }
