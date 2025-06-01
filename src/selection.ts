@@ -11,9 +11,15 @@ export interface ModelPosition {
   path: number[];
 
   /**
-   * Character offset if the path points to a TextNode (or a node that can be treated as having text content).
-   * Or, it can be a node index if the position is between nodes within a parent indicated by 'path'.
-   * e.g., path: [0] (first paragraph), offset: 1 (after first inline child of paragraph)
+   * - If the path points to a Model TextNode (e.g., `path = [blockIndex, inlineTextNodeIndex]`),
+   *   this is a character offset within that TextNode's `text` string.
+   * - If the path points to a parent Model ElementNode (e.g., `path = [blockIndex]` for a paragraph,
+   *   or `path = [listIndex, listItemIndex, paraInListItemIndex]` for a paragraph in a list item),
+   *   this `offset` typically refers to an *index* among that ElementNode's *child nodes*.
+   *   For example, an offset of 0 in an empty paragraph means "at the very start of the paragraph".
+   *   An offset of 1 in a paragraph with one child means "after the first child".
+   * - ProseMirror uses a single integer offset from the start of the document, which simplifies things
+   *   but requires a robust way to count positions across all node types. This PoC uses paths.
    */
   offset: number;
 }
