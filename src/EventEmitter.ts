@@ -4,15 +4,17 @@ class EventEmitter {
 
   public on(event: string, callback: Function) {
     if (!this.eventMap.has(event)) {
-      this.eventMap.set(event, []);
+      this.eventMap.set(event, new Set());
     }
-    this.eventMap.get(event).push(callback);
+    this.eventMap.get(event).add(callback);
   }
 
   public off(event: string, callback: Function) {
     if (this.eventMap.has(event)) {
-      const callbacks = this.eventMap.get(event).filter((cb: Function) => cb !== callback);
-      this.eventMap.set(event, callbacks);
+      const callbacks = this.eventMap.get(event);
+      if (callbacks.has(callback)) {
+        callbacks.delete(callback);
+      }
     }
   }
 

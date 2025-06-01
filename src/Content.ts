@@ -26,7 +26,7 @@ class Content {
     }
   }
 
-  public clearFormat() {
+  public removeFormatting() {
     const range = this.cursor.getRange();
     const text = range?.extractContents();
     const elem = this.doc.createTextNode(text ? text.textContent || '' : '');
