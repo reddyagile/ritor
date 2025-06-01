@@ -2,27 +2,31 @@
 
 import { DocNode, BaseNode, TextNode, InlineNode } from './documentModel.js';
 import { ModelPosition } from './selection.js';
-import { Schema } from './schema.js'; // Added Schema import
+import { Schema } from './schema.js';
 
 /**
  * Normalizes an array of inline nodes, merging adjacent TextNodes with the same marks
  * and removing empty TextNodes.
  * @param inlineNodes Array of inline nodes.
+ * @param schema The schema, used to create new text nodes if merging.
  * @returns A new array with normalized inline nodes.
  */
-export function normalizeInlineArray(inlineNodes: ReadonlyArray<InlineNode>): InlineNode[] {
+export function normalizeInlineArray(inlineNodes: ReadonlyArray<InlineNode>, schema?: Schema): InlineNode[] {
     if (!inlineNodes || inlineNodes.length === 0) {
         return [];
     }
+
     const result: InlineNode[] = [];
     let lastNode: InlineNode | null = null;
+
     for (const node of inlineNodes) {
         if (lastNode && lastNode.isText && !lastNode.isLeaf && node.isText && !node.isLeaf &&
-            lastNode.marks === node.marks) {
+            lastNode.marks === node.marks) { // Simple mark comparison by reference for PoC
             const mergedText = (lastNode as TextNode).text + (node as TextNode).text;
             if (mergedText) {
-                // Assuming node.type has a reference to the schema to create new nodes
-                const newTextNode = node.type.schema.text(mergedText, lastNode.marks) as TextNode;
+                const currentSchema = schema || node.type.schema; // Prefer passed schema, fallback to node's
+                if (!currentSchema) throw new Error("Schema must be available to normalize inline array and create text nodes.");
+                const newTextNode = currentSchema.text(mergedText, lastNode.marks) as TextNode;
                 result[result.length - 1] = newTextNode;
                 lastNode = newTextNode;
             } else {
@@ -85,17 +89,7 @@ export function modelPositionToFlatOffset(doc: DocNode, position: ModelPosition,
         }
     } else {
         if (position.offset !== 0 && !(position.offset === 1 && currentParentNode.nodeSize === 1) ) {
-            // For leaf node, offset 0 is "at start", offset 1 can mean "at end" or "after" if nodeSize is 1.
             // console.warn(`Offset for a leaf node ${currentParentNode.type.name} is ${position.offset}.`);
-        }
-        if (position.offset === 1 && currentParentNode.nodeSize === 1) {
-            // This interpretation means "after the leaf node".
-            // The flatOffset is currently *before* the leaf node's own span.
-            // Adding nodeSize makes it after. But this is usually handled by path to parent, index after child.
-            // For now, if path points to leaf, offset is within its span (0 for start, 1 for end of a size 1 leaf)
-            // flatOffset += position.offset; // This would make offset 1 on a BR add 1 to flatOffset.
-        } else if (position.offset !== 0) {
-            // console.warn(`Offset for a leaf node ${currentParentNode.type.name} is ${position.offset}, usually expected to be 0.`);
         }
     }
     return flatOffset;
@@ -169,4 +163,70 @@ export function flatOffsetToModelPosition(doc: DocNode, targetFlatOffset: number
     }
 }
 
-console.log("modelUtils.ts updated to accept schema param (though not deeply used yet) and previous test fixes.");
+/**
+ * Retrieves a node from the document model at a specific path.
+ * @param doc The root document node.
+ * @param path An array of numbers representing the path to the node. Each number is an index into the content array.
+ * @returns The node at the given path, or null if the path is invalid.
+ */
+export function nodeAtPath(doc: BaseNode, path: number[]): BaseNode | null {
+    let current: BaseNode | null = doc;
+    for (let i = 0; i < path.length; i++) {
+        const index = path[i];
+        if (!current || !current.content || index < 0 || index >= current.content.length) {
+            return null; // Path is invalid or node has no content at this level
+        }
+        current = current.content[index];
+    }
+    return current;
+}
+
+/**
+ * Immutably replaces a node at a given path in the document tree.
+ * @param currentDoc The current document node (or any parent node in the recursion).
+ * @param path The path to the node to be replaced, relative to `currentDoc`.
+ * @param newNode The new node to insert at the path.
+ * @param schema The schema, used to create new parent nodes.
+ * @returns The new document root (or new parent node in recursion), or null if path is invalid.
+ */
+export function replaceNodeAtPath(
+    currentParentNode: BaseNode,
+    path: number[],
+    pathIndex: number,
+    newNode: BaseNode,
+    schema: Schema
+): BaseNode | null {
+    if (pathIndex >= path.length) { // Should not happen if path is to the node itself, not a child
+        throw new Error("Path index out of bounds, path should lead to the node to replace, not its children.");
+    }
+
+    const childIndexToReplace = path[pathIndex];
+    let newContent: BaseNode[];
+
+    if (!currentParentNode.content || childIndexToReplace < 0 || childIndexToReplace >= currentParentNode.content.length) {
+        console.error("Invalid path or content for replacement:", currentParentNode, path, childIndexToReplace);
+        return null; // Invalid path
+    }
+
+    newContent = [...currentParentNode.content];
+
+    if (pathIndex === path.length - 1) { // This is the direct parent of the node to replace
+        newContent[childIndexToReplace] = newNode;
+    } else { // We need to go deeper
+        const childNode = currentParentNode.content[childIndexToReplace];
+        if (childNode.isLeaf || !childNode.content) {
+            console.error("Cannot replace node in path: child is a leaf or has no content, but path is longer.", childNode, path, pathIndex);
+            return null; // Path tries to go into a leaf or childless node
+        }
+        const updatedChild = replaceNodeAtPath(childNode, path, pathIndex + 1, newNode, schema);
+        if (!updatedChild) return null;
+        newContent[childIndexToReplace] = updatedChild;
+    }
+
+    // Use the original node's type and attributes, but with the new content.
+    // The schema's node method will recalculate nodeSize etc.
+    return schema.node(currentParentNode.type, currentParentNode.attrs, newContent, currentParentNode.marks);
+}
+
+
+console.log("modelUtils.ts updated with nodeAtPath and replaceNodeAtPath helpers.");

@@ -1,112 +1,11 @@
 // src/transform/replaceStep.ts
 
-import { DocNode, BaseNode, TextNode } from '../documentModel.js';
+import { DocNode, BaseNode, TextNode, InlineNode } from '../documentModel.js';
 import { Step, StepResult } from './step.js';
 import { StepMap } from './stepMap.js';
 import { Slice } from './slice.js';
-import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray } from '../modelUtils.js'; // Assuming modelUtils path
+import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray, nodeAtPath, replaceNodeAtPath } from '../modelUtils.js';
 import { Schema } from '../schema.js';
-
-
-// Helper function to find a node and its parent/path by flat offset.
-// This is a simplified version for ReplaceStep's PoC needs.
-// Returns null if offset is out of bounds or path is ambiguous for simple replacement.
-function findNodePathAtFlatOffset(doc: DocNode, flatOffset: number, schema: Schema): { node: BaseNode | null, path: number[], localOffset: number, parent: BaseNode } | null {
-    const modelPos = flatOffsetToModelPosition(doc, flatOffset, schema);
-    if (!modelPos) return null;
-
-    let currentParent: BaseNode = doc;
-    let currentChildren = doc.content || [];
-    let path: number[] = [];
-
-    for (let i = 0; i < modelPos.path.length; i++) {
-        const childIdx = modelPos.path[i];
-        if (childIdx >= currentChildren.length) return null; // Path out of bounds
-
-        const childNode = currentChildren[childIdx];
-        path.push(childIdx);
-        currentParent = childNode; // This becomes parent for next iteration or if path ends here
-        currentChildren = childNode.content || []; // For next iter
-
-        if (i === modelPos.path.length - 1) { // Path points to this node
-            return { node: childNode, path: modelPos.path, localOffset: modelPos.offset, parent: currentParent }; // currentParent is actually the node itself here
-        }
-    }
-    // If path is empty (points to doc) or path points to an element node where offset is child index
-    return { node: null, path: modelPos.path, localOffset: modelPos.offset, parent: currentParent };
-}
-
-
-// Very simplified recursive node replacement/creation for immutable updates.
-// This is a placeholder for a more robust solution.
-function replaceInPath(
-    currentParent: BaseNode,
-    path: number[],
-    pathIdx: number,
-    fromModelPos: ModelPosition,
-    toModelPos: ModelPosition,
-    insertSlice: Slice | null, // null for deletion only
-    schema: Schema
-): BaseNode {
-    const currentChildren = currentParent.content ? [...currentParent.content] : [];
-
-    if (pathIdx === path.length) { // We are at the level where changes occur (children of currentParent)
-        const newChildren: BaseNode[] = [];
-        let startIdx = fromModelPos.offset;
-        let endIdx = toModelPos.offset; // If path is same, endIdx is also an offset in this parent
-
-        if (fromModelPos.path.join(',') !== toModelPos.path.join(',')) { // Deletion/replacement spans multiple parents
-            // This PoC does not handle cross-parent modification deeply.
-            // It will effectively delete from startIdx in currentParent if 'from' is here,
-            // or insert at startIdx if 'to' is here but 'from' was in a prior node.
-             if (path.join(',') === fromModelPos.path.slice(0, pathIdx).join(',')) { // 'from' is in this parent or its descendant
-                endIdx = currentChildren.length; // Delete to end of this parent
-             } else if (path.join(',') === toModelPos.path.slice(0, pathIdx).join(',')) { // 'to' is in this parent, 'from' was before
-                startIdx = 0; // Delete from start of this parent
-             } else { // This parent is fully between 'from' and 'to'
-                return schema.node(currentParent.type, currentParent.attrs, []) as BaseNode; // Delete all content
-             }
-        }
-
-        // Simplified text node modification (if paths point to same text node)
-        if (currentParent.isText && fromModelPos.path.join(',') === toModelPos.path.join(',')) {
-            const textNode = currentParent as TextNode;
-            let newText = textNode.text.substring(0, fromModelPos.offset);
-            if (insertSlice && insertSlice.content.length > 0 && insertSlice.content[0].isText) {
-                newText += (insertSlice.content[0] as TextNode).text;
-            }
-            newText += textNode.text.substring(toModelPos.offset);
-            return schema.text(newText, textNode.marks);
-        }
-
-        // Block/inline array modification
-        for (let i = 0; i < startIdx; i++) newChildren.push(currentChildren[i]);
-        if (insertSlice) { // Insertion or replacement
-            // TODO: Handle openStart/openEnd for slices properly. For PoC, assume flat insertion.
-            newChildren.push(...insertSlice.content);
-        }
-        for (let i = endIdx; i < currentChildren.length; i++) newChildren.push(currentChildren[i]);
-
-        const normalized = currentParent.type.inlineContent ? normalizeInlineArray(newChildren as InlineNode[]) : newChildren;
-        return schema.node(currentParent.type, currentParent.attrs, normalized) as BaseNode;
-
-    } else { // Descend further
-        const childToModifyIdx = path[pathIdx];
-        if (childToModifyIdx >= currentChildren.length) {
-            throw new Error("Path out of bounds during replaceInPath recursion.");
-        }
-        currentChildren[childToModifyIdx] = replaceInPath(
-            currentChildren[childToModifyIdx],
-            path,
-            pathIdx + 1,
-            fromModelPos,
-            toModelPos,
-            insertSlice,
-            schema
-        );
-        return schema.node(currentParent.type, currentParent.attrs, currentChildren) as BaseNode;
-    }
-}
 
 
 export class ReplaceStep implements Step {
@@ -120,91 +19,154 @@ export class ReplaceStep implements Step {
 
     apply(doc: DocNode): StepResult {
         const schema = doc.type.schema;
-        const fromModelPos = flatOffsetToModelPosition(doc, this.from, schema);
-        const toModelPos = flatOffsetToModelPosition(doc, this.to, schema);
 
-        if (!fromModelPos || !toModelPos) {
+        const fromPos = flatOffsetToModelPosition(doc, this.from, schema);
+        const toPos = flatOffsetToModelPosition(doc, this.to, schema);
+
+        if (!fromPos || !toPos) {
             return { failed: "Invalid from/to position for ReplaceStep." };
         }
 
-        // PoC Simplification:
-        // This simplified 'apply' assumes changes happen within a common ancestor,
-        // ideally at the same level or within a single text node.
-        // It does NOT handle complex cases like splitting nodes deeply, joining across depths, etc.
-        // It primarily works for top-level block replacement or simple text changes.
+        // --- PoC Focus: Replacement within a single block's inline content ---
+        if (fromPos.path.length === 0 || toPos.path.length === 0) {
+             // This PoC handles inline changes. Top-level block changes could be a separate case or require more complex path logic.
+             // For now, if path is empty, it means from/to are offsets in doc.content (list of blocks).
+             // This was handled by a previous version of ReplaceStep.apply.
+             // Let's add a simplified block-level replacement here for now.
+            if (fromPos.path.length === 0 && toPos.path.length === 0 && fromPos.offset <= (doc.content || []).length && toPos.offset <= (doc.content || []).length) {
+                const newDocContent: BaseNode[] = [];
+                const currentDocContent = doc.content || [];
+                for(let i=0; i < fromPos.offset; i++) newDocContent.push(currentDocContent[i]);
+                newDocContent.push(...this.slice.content);
+                for(let i=toPos.offset; i < currentDocContent.length; i++) newDocContent.push(currentDocContent[i]);
 
-        let newDocNode: DocNode;
+                const newDoc = schema.node(doc.type, doc.attrs, newDocContent) as DocNode;
+                const map = new StepMap([this.from, this.to, this.from, this.from + this.slice.size]);
+                return { doc: newDoc, map };
 
-        // Case 1: Replacing content within the same text node (most granular)
-        if (fromModelPos.path.join(',') === toModelPos.path.join(',') &&
-            fromModelPos.path.length > 0 ) { // Path must exist
-
-            let node = doc as BaseNode;
-            for(let i=0; i < fromModelPos.path.length; i++) {
-                if (!node.content || fromModelPos.path[i] >= node.content.length) return {failed: "Path invalid"};
-                node = node.content[fromModelPos.path[i]];
+            } else {
+                return { failed: "ReplaceStep PoC: Path resolution for top-level replacement is complex or paths are mixed." };
             }
-
-            if (node.isText) {
-                 newDocNode = replaceInPath(doc, fromModelPos.path, 0, fromModelPos, toModelPos, this.slice, schema) as DocNode;
-            } else { // Path points to an element node, replacement is of its children
-                 const commonPath = fromModelPos.path; // Path to the parent element
-                 newDocNode = replaceInPath(doc, commonPath, 0, fromModelPos, toModelPos, this.slice, schema) as DocNode;
-            }
-
-        }
-        // Case 2: Replacing block nodes at the document level (path is empty for from/to ModelPos, offset is index)
-        else if (fromModelPos.path.length === 0 && toModelPos.path.length === 0) {
-            const newContent: BaseNode[] = [];
-            const docContent = doc.content || [];
-            for (let i = 0; i < fromModelPos.offset; i++) newContent.push(docContent[i]);
-            if (this.slice.content.length > 0) newContent.push(...this.slice.content);
-            for (let i = toModelPos.offset; i < docContent.length; i++) newContent.push(docContent[i]);
-            newDocNode = schema.node(doc.type, doc.attrs, newContent) as DocNode;
-        }
-        // Case 3: More complex, potentially cross-parent modification (highly simplified for PoC)
-        // Find common ancestor path. For PoC, assume it's the doc node if paths differ significantly.
-        else {
-            // This PoC replaceInPath is not robust enough for general cross-parent.
-            // Fallback to a simpler top-level block replacement logic if paths are different.
-            // This is a significant simplification.
-            console.warn("ReplaceStep PoC: Complex cross-parent replacement is simplified. Results may be approximate.");
-            // Try to find the shallowest common ancestor for the modification.
-            // For this PoC, we'll assume the common ancestor is the doc node itself for any complex case.
-            // This is a very rough approximation.
-
-            // A more robust way would be to find the actual common ancestor path.
-            // For now, this simplified logic will likely fail for many complex cases.
-            // Let's try to make it slightly better: use the shorter path as the "parent" path for replaceInPath.
-            const pathForReplace = fromModelPos.path.length <= toModelPos.path.length ? fromModelPos.path : toModelPos.path;
-            // This is still not correct, common ancestor needs to be found.
-            // For PoC, if not simple text or simple block, let's just do a block-level based on from/to offsets
-            // This is very hacky for now.
-            const startBlockIndex = fromModelPos.path.length > 0 ? fromModelPos.path[0] : fromModelPos.offset;
-            const endBlockIndex = toModelPos.path.length > 0 ? toModelPos.path[0] : toModelPos.offset;
-            // This is not robust at all if paths are deeper.
-
-            const newContent: BaseNode[] = [];
-            const docContent = doc.content || [];
-            for (let i = 0; i < startBlockIndex; i++) { // Use startBlockIndex as a rough guide
-                if (docContent[i]) newContent.push(docContent[i]);
-            }
-            if (this.slice.content.length > 0) newContent.push(...this.slice.content);
-            for (let i = endBlockIndex + (fromModelPos.path.length > 0 ? 1: 0) ; i < docContent.length; i++) { // Use endBlockIndex as rough guide
-                 if (docContent[i]) newContent.push(docContent[i]);
-            }
-             newDocNode = schema.node(doc.type, doc.attrs, newContent) as DocNode;
-
-            // return { failed: "ReplaceStep PoC: Only same-text-node or top-level block replacement is reliably supported." };
         }
 
-        const map = new StepMap([this.from, this.to - this.from, this.from + this.slice.size]);
-        // The StepMap constructor used here [delOffset, delCount, insCount] is from an earlier PoC.
-        // A more standard StepMap might be `new StepMap([this.from, this.to, this.from, this.from + this.slice.size])`
-        // For now, let's use the one compatible with current StepMap PoC: range [oldStart, oldEnd, newStart, newEnd]
-        const stepMapInstance = new StepMap([this.from, this.to, this.from, this.from + this.slice.size]);
+        // Assuming path like [blockIndex, inlineNodeIndex] for fromPos, or [blockIndex] for fromPos if offset points to block content array
+        // For inline replacement, path must be at least 2 deep (block -> inline_node) or 1 deep if offset points to text node directly under block (not typical for current model)
+        // Let's refine path logic: fromPos.path points *to the node* where replacement starts.
+        // fromPos.offset is *within* that node (char offset for text, child index for element).
 
-        return { doc: newDocNode, map: stepMapInstance };
+        // Parent path for inline content is one level up from the inline node itself.
+        const fromParentPath = fromPos.path.slice(0, -1);
+        const toParentPath = toPos.path.slice(0, -1);
+
+        if (fromParentPath.join(',') !== toParentPath.join(',')) {
+            return { failed: "ReplaceStep PoC: Inline range cannot span multiple parent blocks yet." };
+        }
+        if (fromParentPath.length === 0 && doc.type.name !== 'doc' && !doc.type.inlineContent) { // Path like [0] (e.g. first text child of a block)
+             return { failed: "ReplaceStep PoC: Cannot replace direct children of non-doc root using this inline logic."};
+        }
+
+
+        const parentBlockNode = nodeAtPath(doc, fromParentPath) as BaseNode;
+        if (!parentBlockNode || !parentBlockNode.content || parentBlockNode.isLeaf) {
+            // If fromParentPath is empty, parentBlockNode is the doc itself.
+            // This logic is for inline content within a *child* block of the doc.
+            // If parentBlockNode is doc, content is list of blocks, not inline.
+             if (parentBlockNode === doc && fromPos.path.length === 1 && toPos.path.length === 1 && fromPos.path[0] === toPos.path[0]) {
+                // This means from/to are within the same top-level block.
+                // The fromParentPath would be empty.
+                // The node to modify is doc.content[fromPos.path[0]].
+                // This is effectively replacing a block, or content within that block.
+                // This is the primary case this PoC aims to handle.
+             } else {
+                return { failed: "ReplaceStep PoC: Invalid parent block for inline replacement. Path: " + fromParentPath.join(',') };
+             }
+        }
+
+        // All slice content must be inline if parentBlockNode is a text block (e.g. paragraph)
+        if (parentBlockNode.type.spec.content?.includes("inline") && // e.g. "inline*"
+            !this.slice.content.every(n => n.type.spec.inline || n.isText)) {
+            return { failed: "ReplaceStep PoC: Cannot insert block content into an inline content parent." };
+        }
+
+
+        const inlineContent = parentBlockNode.content as ReadonlyArray<BaseNode>;
+        const fromInlineNodeIndex = fromPos.path[fromPos.path.length - 1]; // Index of the text/inline node
+        const fromInlineCharOffset = fromPos.offset; // Character offset within that text/inline node
+        const toInlineNodeIndex = toPos.path[toPos.path.length - 1];
+        const toInlineCharOffset = toPos.offset;
+
+        const newInlineContent: BaseNode[] = [];
+
+        // Part 1: Content before the starting inline node
+        for (let i = 0; i < fromInlineNodeIndex; i++) {
+            newInlineContent.push(inlineContent[i]);
+        }
+
+        // Part 2: Handle the starting inline node (potentially split)
+        const startNode = inlineContent[fromInlineNodeIndex];
+        if (!startNode) return { failed: "Start node for replacement not found."};
+
+        if (startNode.isText && !startNode.isLeaf) { // Text node
+            if (fromInlineCharOffset > 0) {
+                newInlineContent.push(schema.text(startNode.text.slice(0, fromInlineCharOffset), startNode.marks));
+            }
+        } else if (fromInlineCharOffset !== 0) { // Non-text inline node, offset must be 0 if not splitting
+            return { failed: "ReplaceStep PoC: Offset within a non-text inline node must be 0 unless it's a container (not handled yet)." };
+        } else if (fromInlineCharOffset === 0 && fromInlineNodeIndex !== toInlineNodeIndex) {
+            // If replacing this whole non-text inline node and range continues, it's omitted here.
+            // If range starts and ends at this node (offset 0 to its end), it's also omitted.
+        } else if (fromInlineCharOffset === 0 && fromInlineNodeIndex === toInlineNodeIndex && toInlineCharOffset === 0 && this.slice.content.length === 0) {
+            // Special case: deleting a 0-width range at start of a non-text inline node (no-op, but include node)
+            // This case means from == to, and slice is empty. We are deleting nothing.
+            // However, the loop for Part 5 will skip this node if fromInlineNodeIndex === toInlineNodeIndex.
+            // So, if it's a no-op replacement *at* this node, it should be included.
+            // This is complex. For now, if from==to, the original node remains or is replaced by slice.
+        }
+
+
+        // Part 3: Insert the slice content
+        newInlineContent.push(...this.slice.content);
+
+
+        // Part 4: Handle the ending inline node (potentially split)
+        const endNode = inlineContent[toInlineNodeIndex];
+        if (!endNode) return { failed: "End node for replacement not found."};
+
+        if (endNode.isText && !endNode.isLeaf) { // Text node
+            if (toInlineCharOffset < endNode.text.length) {
+                newInlineContent.push(schema.text(endNode.text.slice(toInlineCharOffset), endNode.marks));
+            }
+        } else if (toInlineCharOffset !== (endNode.isLeaf ? 1 : (endNode.content?.length || 0)) && toInlineCharOffset !== 0 ) {
+             // If not text, and not leaf with offset 1 (after), or not container with offset at end of children
+             // and not offset 0 (before/at start), then it's an unhandled split of non-text inline.
+             // For leaf node, toInlineCharOffset could be 1 (meaning after the leaf).
+             // If toInlineCharOffset is 0, it means end of range is at start of this node.
+            if (!endNode.isLeaf || toInlineCharOffset !== 1) { // Allow offset 1 for end of leaf node
+               // console.warn("ReplaceStep PoC: Offset within a non-text inline node at end of range is complex.", endNode, toInlineCharOffset);
+            }
+        }
+
+
+        // Part 5: Content after the ending inline node
+        for (let i = toInlineNodeIndex + 1; i < inlineContent.length; i++) {
+            newInlineContent.push(inlineContent[i]);
+        }
+
+        const normalizedNewInlineContent = normalizeInlineArray(newInlineContent as InlineNode[], schema);
+
+        // Create the new parent block node with the modified inline content
+        // The path to this parent block node is `fromParentPath`.
+        const newDoc = replaceNodeAtPath(doc, fromParentPath, 0,
+            schema.node(parentBlockNode.type, parentBlockNode.attrs, normalizedNewInlineContent, parentBlockNode.marks),
+            schema
+        ) as DocNode | null;
+
+        if (!newDoc) {
+            return { failed: "Failed to replace node in path using ModelUtils.replaceNodeAtPath." };
+        }
+
+        const map = new StepMap([this.from, this.to, this.from, this.from + this.slice.size]);
+        return { doc: newDoc, map };
     }
 
     getMap(): StepMap {
@@ -212,11 +174,7 @@ export class ReplaceStep implements Step {
     }
 
     invert(doc: DocNode): Step | null {
-        // To invert, we need the content of the document that was replaced by this step.
-        // This content is between `this.from` and `this.to` in the original `doc`.
-        // This requires a method like `doc.sliceContent(fromFlat, toFlat)`
-
-        // PoC: If we can resolve from/to to simple block indices for the original doc.
+        // This remains highly simplified. A robust invert needs doc.sliceContent(fromFlat, toFlat).
         const schema = doc.type.schema;
         const fromModelPos = flatOffsetToModelPosition(doc, this.from, schema);
         const toModelPos = flatOffsetToModelPosition(doc, this.to, schema);
@@ -225,31 +183,42 @@ export class ReplaceStep implements Step {
 
         let originalDeletedContent: BaseNode[] = [];
 
-        if (fromModelPos.path.length === 0 && toModelPos.path.length === 0 && this.from < this.to) { // Simple top-level block deletion
+        // Simplified inversion for top-level blocks or same-text-node
+        if (fromModelPos.path.length === 0 && toModelPos.path.length === 0 && this.from < this.to) {
             originalDeletedContent = (doc.content || []).slice(fromModelPos.offset, toModelPos.offset);
-        } else if (fromModelPos.path.join(',') === toModelPos.path.join(',') && fromModelPos.path.length > 0) {
-            // Content deleted within a single node (e.g., text)
-            // This is hard to get accurately without a proper doc.sliceContentByPath method.
-            // For PoC, if it was text, we'd need the substring.
-            // For now, this PoC invert will be limited.
-            let parentNode = doc as BaseNode;
-            for(let i=0; i < fromModelPos.path.length -1; i++) parentNode = parentNode.content![fromModelPos.path[i]];
-            const targetNode = parentNode.content![fromModelPos.path[fromModelPos.path.length-1]];
-            if (targetNode.isText) {
-                originalDeletedContent = [schema.text((targetNode as TextNode).text.substring(fromModelPos.offset, toModelPos.offset), targetNode.marks)];
-            } else { // Deletion of children within an element
-                originalDeletedContent = (targetNode.content || []).slice(fromModelPos.offset, toModelPos.offset);
-            }
         } else {
-            // Cannot reliably invert complex cross-parent deletions with this PoC.
-            console.warn("ReplaceStep.invert PoC: Cannot reliably invert complex or cross-parent deletions.");
-            return null;
+            // Attempt to get content if path points to a single node (parent of change)
+            const parentPath = fromPos.path.slice(0, -1);
+            const parentNode = nodeAtPath(doc, parentPath);
+            if (parentNode && parentNode.content) {
+                 const startIndex = fromModelPos.path[fromPos.path.length -1];
+                 const endIndex = toModelPos.path[toPos.path.length -1];
+                 if (fromModelPos.path.join(',') === toModelPos.path.join(',')) { // Change within one node
+                    const targetNode = parentNode.content[startIndex];
+                    if (targetNode.isText) {
+                        originalDeletedContent = [schema.text((targetNode as TextNode).text.substring(fromModelPos.offset, toModelPos.offset), targetNode.marks)];
+                    } else if (!targetNode.isLeaf) { // Element node, content is array of children
+                        originalDeletedContent = (targetNode.content || []).slice(fromModelPos.offset, toModelPos.offset);
+                    } else { // Leaf node - if it was replaced, its old self is the content
+                         if (fromModelPos.offset === 0 && toModelPos.offset === targetNode.nodeSize) { // replaced whole leaf
+                            originalDeletedContent = [targetNode];
+                         }
+                    }
+                 } else { // Spans multiple inline nodes within same parent
+                    for(let i = startIndex; i <= endIndex; i++) {
+                        // This is still too simple, doesn't handle partial start/end nodes in multi-node span
+                        originalDeletedContent.push(parentNode.content[i]);
+                    }
+                 }
+            } else {
+                 console.warn("ReplaceStep.invert PoC: Cannot reliably invert complex or cross-parent deletions.");
+                 return null;
+            }
         }
 
-        const originalSlice = new Slice(originalDeletedContent, 0, 0); // PoC: always closed slice
-
+        const originalSlice = new Slice(originalDeletedContent, 0, 0);
         return new ReplaceStep(this.from, this.from + this.slice.size, originalSlice);
     }
 }
 
-console.log("transform/replaceStep.ts updated to use flat offsets and modelUtils for position resolution (still PoC apply).");
+console.log("transform/replaceStep.ts updated for more robust inline content replacement (still PoC).");
