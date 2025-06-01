@@ -88,7 +88,7 @@ export interface NodeSpec {
   // selectable?: boolean;
   // draggable?: boolean;
   // code?: boolean; // Is this a code block?
-  // defining?: boolean; // Does this node mark a point where attributes are no longer inherited?
+  defining?: boolean; // Does this node mark a point where attributes are no longer inherited?
 }
 
 export interface MarkSpec {

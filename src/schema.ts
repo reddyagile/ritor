@@ -168,33 +168,51 @@ export class NodeType {
     }
 
     let calculatedNodeSize: number;
-    if (this.isLeaf || this.spec.atom) { // Leaf nodes like hard_break or image
-        calculatedNodeSize = 1;
-    } else if (this.isBlock || this.spec.group?.includes("block") || this.spec.group?.includes("list_item_block")) { // Block nodes
-        calculatedNodeSize = 2 + calculatedContentSize; // 1 for open tag, 1 for close tag
-    } else if (this.spec.inline) { // Inline, non-atom, with content (e.g. a hypothetical styled span)
+    const isNodeLeaf = !!this.spec.atom; // Atom nodes are leaves
+    const isNodeText = this.name === 'text';
+
+    if (this.name === this.schema.topNodeType.name) { // Document node itself
+        calculatedContentSize = finalContent.reduce((sum, child) => sum + child.nodeSize, 0);
         calculatedNodeSize = calculatedContentSize;
-    } else { // Fallback, should ideally not be reached for well-defined nodes
-        calculatedNodeSize = calculatedContentSize + (finalContent.length > 0 ? 2 : 0);
+    } else if (isNodeLeaf) {
+        calculatedNodeSize = 1; // Leaf nodes like <br> or <img> count as 1
+        calculatedContentSize = 0; // Leaf nodes have no content
+    } else if (this.isBlock || this.spec.group?.includes("block") || this.spec.group?.includes("list_item_block")) { // Block nodes
+        calculatedContentSize = finalContent.reduce((sum, child) => sum + child.nodeSize, 0);
+        calculatedNodeSize = 2 + calculatedContentSize; // 1 for open tag, 1 for close tag
+    } else if (this.spec.inline && !isNodeText) { // Inline, non-text, non-leaf (e.g. a hypothetical styled span with content)
+        // This case is complex. If it's an inline node that doesn't get its own tags from its type
+        // (e.g. marks provide the tags like <a> for a link mark on a text node),
+        // then its size might just be its contentSize.
+        // If the inline node type itself implies tags (e.g. <span class="foo">...</span>), then it's 2 + content.
+        // For now, let's assume inline non-text, non-leaf nodes are like blocks regarding size calculation if they have content.
+        // This might need refinement based on how marks vs. inline nodes with styles are handled.
+        calculatedContentSize = finalContent.reduce((sum, child) => sum + child.nodeSize, 0);
+        calculatedNodeSize = (finalContent.length > 0 ? 2 : 0) + calculatedContentSize; // Only add for tags if it has content or is meant to be non-empty
+    } else { // Fallback (should primarily be text nodes, handled by schema.text, or misconfigured nodes)
+        calculatedContentSize = finalContent.reduce((sum, child) => sum + child.nodeSize, 0);
+        console.warn(`Node type ${this.name} using fallback size calculation. Assuming content size only.`);
+        calculatedNodeSize = calculatedContentSize;
     }
 
     const nodeObject: ModelNode = {
       type: this,
-      attrs: finalAttrs, // Use finalAttrs which includes ID for blocks
-      content: finalContent.length > 0 ? finalContent : undefined, // Store as undefined if empty
-      // marks: For non-text inline nodes, marks could be passed via _marks
+      attrs: finalAttrs,
+      content: finalContent.length > 0 ? finalContent : [], // Ensure content is an array, even if empty
       nodeSize: calculatedNodeSize,
-    } as unknown as ModelNode; // Initial cast
+      isLeaf: isNodeLeaf,
+      isText: isNodeText,
+      // marks: For non-text inline nodes, marks could be passed via _marks
+    } as unknown as ModelNode;
 
     if (this.name === this.schema.topNodeType.name) {
-      // This type assertion is a bit unsafe but necessary due to generic ModelNode return type
       (nodeObject as any).contentSize = calculatedContentSize;
     }
 
     return nodeObject;
   }
 
-  private defaultAttrs(attrs?: Attrs): Attrs {
+  public defaultAttrs(attrs?: Attrs): Attrs {
     const defaulted: Attrs = {};
     for (const attrName in this.spec.attrs) {
       const attrSpec = this.spec.attrs[attrName];
@@ -315,8 +333,10 @@ export class Schema {
       attrs: defaultedAttrs,
       text: text,
       marks: marks || [], // Ensure marks is an array
-      nodeSize: text.length, // Calculate nodeSize for text node
-      // content should be undefined for text nodes
+      nodeSize: text.length, // nodeSize for text node is its length
+      isText: true,          // Mark as text node
+      isLeaf: false,         // Text nodes are not considered leaves in the same way <br> is; they have "content" (the text itself)
+      content: [],           // Text nodes don't have child nodes, so content is empty array
     } as unknown as ModelTextNode;
   }
 

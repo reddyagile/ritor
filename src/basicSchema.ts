@@ -4,7 +4,7 @@ import { BaseNode, Mark as ModelMark } from './documentModel.js';
 
 export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   doc: {
-    content: "block+",
+    content: "block*", // Allow empty doc (0 or more blocks)
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const attrs: Attrs = { class: "ritor-document" };
         if (node.attrs?.id) {
@@ -30,12 +30,13 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   text: {
     group: "inline",
     inline: true,
+    // atom: false, // Text nodes are not atoms, they have content (the text chars)
     // No toDOM for text nodes, handled by parent/serializer.
     // No parseDOM for text nodes, DOMParser handles TEXT_NODE directly.
   },
   hard_break: {
     inline: true,
-    atom: true,
+    atom: true, // This makes it a leaf node with nodeSize 1
     group: "inline",
     toDOM: (_node: BaseNode): DOMOutputSpec => ["br"],
     parseDOM: [{ tag: "br" }]

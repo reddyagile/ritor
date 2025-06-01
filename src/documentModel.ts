@@ -37,6 +37,8 @@ export interface BaseNode {
   readonly marks?: ReadonlyArray<AnyMark>; // Marks for inline content, esp. TextNode
   // id?: string; // This was considered but ID should be part of attrs for schema consistency
   readonly nodeSize: number; // Calculated size of the node
+  readonly isLeaf?: boolean; // Indicates if the node is a leaf node
+  readonly isText?: boolean; // Indicates if the node is a text node
 }
 
 // TextNode now also uses NodeType
