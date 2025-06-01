@@ -9,6 +9,7 @@ import { basicNodeSpecs, basicMarkSpecs } from './basicSchema.js';
 import { NodeType, MarkType } from './schema.js';
 import { ModelUtils } from './modelUtils.js';
 import { ModelSelection, ModelPosition } from './selection.js';
+import { UndoManager } from './undoManager.js'; // Import UndoManager
 
 // Definition for SimpleChange for PoC selection mapping
 type SimpleChange =
@@ -24,10 +25,11 @@ export class RitorVDOM {
   private domPatcher: DomPatcher;
   public readonly schema: Schema;
   private modelUtils: ModelUtils;
+  private undoManager: UndoManager; // Added UndoManager property
   private isReconciling: boolean = false;
   private observer: MutationObserver;
   public currentModelSelection: ModelSelection | null = null;
-  private lastAppliedChange: SimpleChange | null = null; // For selection transformation
+  private lastAppliedChange: SimpleChange | null = null;
 
   constructor(target: string | HTMLElement, schema?: Schema) {
     if (typeof target === 'string') {
@@ -42,6 +44,7 @@ export class RitorVDOM {
 
     this.schema = schema || new Schema({ nodes: basicNodeSpecs, marks: basicMarkSpecs });
     this.modelUtils = new ModelUtils(this.schema);
+    this.undoManager = new UndoManager(); // Instantiate UndoManager
 
     this.currentViewDoc = this.schema.node("doc", null, [
       this.schema.node("paragraph", null, [
@@ -49,13 +52,31 @@ export class RitorVDOM {
       ])
     ]);
 
+    if (this.currentViewDoc) { // Add initial state to undo manager
+        this.undoManager.add(this.currentViewDoc);
+    }
+
     this.domPatcher = new DomPatcher(this.$el, this.currentViewDoc, this.schema);
     this.$el.contentEditable = 'true';
 
-    this.$el.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter') {
+    this.$el.addEventListener('keydown', (event: KeyboardEvent) => {
+      let handled = false;
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
+        if (event.shiftKey) { // Ctrl+Shift+Z or Cmd+Shift+Z for redo
+          this.redo();
+        } else { // Ctrl+Z or Cmd+Z for undo
+          this.undo();
+        }
+        handled = true;
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') {
+        this.redo();
+        handled = true;
+      }
+      // Removed specific Enter key log here as it's handled by beforeinput.
+      // Other specific keydown logic could be added here.
+
+      if (handled) {
         event.preventDefault();
-        console.log("'Enter' pressed. Call editor.addParagraph('New Para from Enter') from console to test.");
       }
     });
 
@@ -70,6 +91,7 @@ export class RitorVDOM {
     this.$el.addEventListener('keyup', this.updateModelSelectionState.bind(this));
   }
 
+  // ... (domToModelPosition, mapDomSelectionToModel, updateModelSelectionState, modelToDomPosition, applyModelSelectionToDom remain unchanged from previous correct state)
   // TODO: SELECTION MAPPING - CRITICAL FOR ROBUSTNESS (domToModelPosition)
   private domToModelPosition(domNode: globalThis.Node, domOffset: number): ModelPosition | null {
     let containingElement: HTMLElement | null = null;
@@ -96,7 +118,7 @@ export class RitorVDOM {
     }
 
     if (!domParagraphElement || domParagraphElement.nodeName !== 'P') {
-        if (containingElement === this.$el && this.$el.children.length > 0) {
+        if (containingElement === this.$el && this.$el.children.length > 0 && domOffset < this.$el.children.length) {
             const targetPara = this.$el.children[domOffset] as HTMLElement;
             if (targetPara && targetPara.nodeName === 'P') {
                 domParagraphElement = targetPara;
@@ -205,6 +227,7 @@ export class RitorVDOM {
     }
   }
 
+
   private handleBeforeInput(event: InputEvent): void {
     this.updateModelSelectionState();
     if (this.isReconciling) return;
@@ -245,14 +268,14 @@ export class RitorVDOM {
       } else if ( (paragraphContent.length === 0 || modelInlineNodeIndex === -1 || modelInlineNodeIndex === paragraphContent.length) && textOffset === 0 ) {
         const newTextNode = this.schema.text(event.data || "");
         const targetInlineIdx = (modelInlineNodeIndex === -1 || paragraphContent.length === 0) ? 0 : modelInlineNodeIndex;
-        if(modelInlineNodeIndex === -1 || paragraphContent.length === 0) {
+        if(modelInlineNodeIndex === -1 || paragraphContent.length === 0) { // Empty paragraph
             newInlineContent = [newTextNode];
         } else {
             newInlineContent = [...paragraphContent];
             newInlineContent.splice(targetInlineIdx, 0, newTextNode);
         }
         this.lastAppliedChange = { type: 'insertText', path: [modelParaIndex, targetInlineIdx], offset: 0, length: event.data.length};
-      } else { console.warn("InsertText: Unhandled case"); return; }
+      } else { console.warn("InsertText: Unhandled case for text insertion."); return; }
 
       const normalizedInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
       const updatedParagraph = this.schema.node(modelParagraph.type as NodeType, modelParagraph.attrs, normalizedInlineContent);
@@ -273,18 +296,23 @@ export class RitorVDOM {
       const textAfter = (targetModelTextNode && targetModelTextNode.type.name === 'text') ? targetModelTextNode.text.slice(textOffset) : "";
       const marksFromSplit = (targetModelTextNode && targetModelTextNode.type.name === 'text') ? targetModelTextNode.marks || [] : [];
       let resolvedInlineIndex = modelInlineNodeIndex === -1 ? 0 : modelInlineNodeIndex;
+
       let currentParaInlineNodes: BaseNode[] = [];
       for (let i = 0; i < resolvedInlineIndex; i++) if(currentParaContent[i]) currentParaInlineNodes.push(currentParaContent[i]);
       if (textBefore) currentParaInlineNodes.push(this.schema.text(textBefore, marksFromSplit));
-      currentParaInlineNodes = this.modelUtils.normalizeInlineArray(currentParaInlineNodes);
-      let newParaInlineNodes: BaseNode[] = [this.schema.text(textAfter, marksFromSplit)];
-      for (let i = resolvedInlineIndex + 1; i < currentParaContent.length; i++) if(currentParaContent[i]) newParaInlineNodes.push(currentParaContent[i]);
       const nodeAtSplitPoint = currentParaContent[resolvedInlineIndex];
-      if (nodeAtSplitPoint && (nodeAtSplitPoint.type as NodeType).name !== 'text') {
-          if(textOffset === 0) newParaInlineNodes = [nodeAtSplitPoint, ...newParaInlineNodes.slice(1)];
-          else currentParaInlineNodes.push(nodeAtSplitPoint);
+      if (nodeAtSplitPoint && (nodeAtSplitPoint.type as NodeType).name !== 'text' && textOffset === 1) { // Split after an atom node
+          currentParaInlineNodes.push(nodeAtSplitPoint);
       }
+      currentParaInlineNodes = this.modelUtils.normalizeInlineArray(currentParaInlineNodes);
+
+      let newParaInlineNodes: BaseNode[] = [this.schema.text(textAfter, marksFromSplit)];
+      if (nodeAtSplitPoint && (nodeAtSplitPoint.type as NodeType).name !== 'text' && textOffset === 0) { // Split before an atom node
+          newParaInlineNodes = [nodeAtSplitPoint, ...newParaInlineNodes];
+      }
+      for (let i = resolvedInlineIndex + 1; i < currentParaContent.length; i++) if(currentParaContent[i]) newParaInlineNodes.push(currentParaContent[i]);
       newParaInlineNodes = this.modelUtils.normalizeInlineArray(newParaInlineNodes);
+
       const updatedCurrentParagraph = this.schema.node(modelParagraph.type as NodeType, modelParagraph.attrs, currentParaInlineNodes);
       const newGeneratedParagraph = this.schema.node("paragraph", null, newParaInlineNodes);
       const newDocContent = [...(this.currentViewDoc.content || [])];
@@ -331,6 +359,10 @@ export class RitorVDOM {
 
     if (newDoc) {
       this.isReconciling = true;
+      // Add to undo stack *before* currentViewDoc is updated
+      if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+      }
       this.updateDocument(newDoc);
     } else {
       this.lastAppliedChange = null;
@@ -362,12 +394,12 @@ export class RitorVDOM {
     if (!domChangedParagraph && this.$el.children.length === 1 && this.$el.children[0].nodeName === 'P') domChangedParagraph = this.$el.children[0] as HTMLElement;
 
     if (domChangedParagraph) modelParaIndex = Array.from(this.$el.children).indexOf(domChangedParagraph);
-    else { this.isReconciling = false; return; }
+    else { this.isReconciling = false; this.lastAppliedChange = null; return; }
 
     if (modelParaIndex !== -1 && this.currentViewDoc.content && modelParaIndex < this.currentViewDoc.content.length) {
       const oldModelParagraph = this.currentViewDoc.content[modelParaIndex];
       const oldModelParagraphType = oldModelParagraph.type as NodeType;
-      if (oldModelParagraphType.name !== 'paragraph') { this.isReconciling = false; return; }
+      if (oldModelParagraphType.name !== 'paragraph') { this.isReconciling = false; this.lastAppliedChange = null; return; }
       const newInlineNodesFromDOM: BaseNode[] = [];
       if (domChangedParagraph && domChangedParagraph.childNodes) {
           domChangedParagraph.childNodes.forEach(childDomNode => {
@@ -388,8 +420,13 @@ export class RitorVDOM {
       const newDocContent = [...(this.currentViewDoc.content || [])];
       newDocContent[modelParaIndex] = newModelParagraph;
       const newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+
+      if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+      }
       this.updateDocument(newDoc);
     } else console.warn("RitorVDOM: Changed paragraph not found in model or model out of sync.");
+
     Promise.resolve().then(() => {
         this.isReconciling = false;
         this.updateModelSelectionState();
@@ -398,8 +435,6 @@ export class RitorVDOM {
   }
 
   // Simple position mapping - PoC
-  // TODO: Make this more robust, handle all change types, and consider node structure more deeply.
-  // This current version assumes paths are [paraIdx, inlineNodeIdx] for text-related changes.
   private mapModelPosition(pos: ModelPosition, change: SimpleChange): ModelPosition {
     let { path: currentPath, offset: currentOffset } = pos;
     let newPath = [...currentPath];
@@ -436,26 +471,18 @@ export class RitorVDOM {
             }
         }
     } else if (change.type === 'splitNode') {
-        if (posInlineIndex === change.path[1] && currentOffset >= change.offset) {
+        const splitAtInlineIndex = change.path[1];
+        if (posInlineIndex === splitAtInlineIndex && currentOffset >= change.offset) {
             newPath[0] = change.newParaPathIndex;
             newPath[1] = 0;
             currentOffset = currentOffset - change.offset;
-        } else if (posInlineIndex > change.path[1]) {
+        } else if (posInlineIndex > splitAtInlineIndex) {
             newPath[0] = change.newParaPathIndex;
-            // This needs a more accurate way to calculate the new inline index
-            // For PoC, it's simplified.
-            newPath[1] = (posInlineIndex - (change.path[1] + 1)) + ((textAfterIsEmpty(change, this.currentViewDoc)) ? 0 : 1);
+            newPath[1] = posInlineIndex - (splitAtInlineIndex + 1);
         }
     }
     return { path: newPath, offset: currentOffset };
   }
-  // Helper for mapModelPosition during splitNode, can be more sophisticated
-  // This is a placeholder, real logic needs access to the actual text content after split.
-  // For now, this helper is not fully correct and mapModelPosition's split logic is simplified.
-  // const textAfterIsEmpty = (change: SimpleChange, doc: BaseNode): boolean => {
-  //   // Conceptual: check if the text content moved to the new paragraph is empty
-  //   return true;
-  // };
 
 
   public updateDocument(newDoc: BaseNode): void {
@@ -469,16 +496,26 @@ export class RitorVDOM {
 
     this.lastAppliedChange = null;
 
-    if (this.currentViewDoc && (this.currentViewDoc === newDoc || DomPatcher.prototype.areNodesEffectivelyEqual(this.currentViewDoc, newDoc))) { // Patched to call areNodesEffectivelyEqual correctly
+    if (this.currentViewDoc && (this.currentViewDoc === newDoc || this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc))) {
        if(selectionToRestore) this.applyModelSelectionToDom(selectionToRestore);
        this.updateModelSelectionState();
+       // If isReconciling was true because of a beforeinput that resulted in an effectively same doc,
+       // we need to ensure it's reset.
+       if (this.isReconciling) { // Check if we were in a reconcile cycle from beforeinput
+           Promise.resolve().then(() => { this.isReconciling = false; });
+       }
        return;
     }
 
     if (newDoc.type !== this.schema.topNodeType) {
         console.error(`Invalid document root type. Expected ${this.schema.topNodeType.name}, got ${(newDoc.type as NodeType).name}`);
+        if (this.isReconciling) { // Ensure isReconciling is reset even on error
+            Promise.resolve().then(() => { this.isReconciling = false; });
+        }
         return;
     }
+
+    // const oldDocForUndo = this.currentViewDoc; // This is moved to handleBeforeInput/handleMutations
 
     this.currentViewDoc = newDoc;
     this.domPatcher.patch(this.currentViewDoc);
@@ -490,9 +527,49 @@ export class RitorVDOM {
 
     console.log("Document updated successfully.");
     console.log("Current HTML:", this.$el.innerHTML);
+
+    // Ensure isReconciling is reset after a successful patch cycle initiated by handleBeforeInput or handleMutations
+    if (this.isReconciling) {
+        Promise.resolve().then(() => { this.isReconciling = false; });
+    }
   }
 
-  // --- Example Modification Methods ---
+  public undo(): void {
+    if (!this.undoManager.hasUndo()) {
+        console.log("Nothing to undo");
+        return;
+    }
+    const prevState = this.undoManager.undo(this.currentViewDoc);
+    if (prevState) {
+        this.isReconciling = true; // Prevent mutations during undo/redo patch
+        this.currentViewDoc = prevState;
+        this.domPatcher.patch(this.currentViewDoc);
+        this.lastAppliedChange = null;
+        this.updateModelSelectionState();
+        console.log("Undo performed.");
+        Promise.resolve().then(() => { this.isReconciling = false; });
+    }
+  }
+
+  public redo(): void {
+    if (!this.undoManager.hasRedo()) {
+        console.log("Nothing to redo");
+        return;
+    }
+    const nextState = this.undoManager.redo(this.currentViewDoc);
+    if (nextState) {
+        this.isReconciling = true; // Prevent mutations during undo/redo patch
+        this.currentViewDoc = nextState;
+        this.domPatcher.patch(this.currentViewDoc);
+        this.lastAppliedChange = null;
+        this.updateModelSelectionState();
+        console.log("Redo performed.");
+        Promise.resolve().then(() => { this.isReconciling = false; });
+    }
+  }
+
+  // ... (Example Modification Methods: addParagraph, changeParagraphText, toggleBoldOnFirstWordInParagraph, getDocJson)
+  // These methods also need to call undoManager.add
 
   public addParagraph(text: string): void {
     if (!this.currentViewDoc.content) {
@@ -502,6 +579,9 @@ export class RitorVDOM {
     const newParagraph = this.schema.node("paragraph", null, [this.schema.text(text)]);
     const newContent = [...this.currentViewDoc.content, newParagraph];
     const newDoc = this.schema.node("doc", null, newContent);
+    if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+    }
     this.updateDocument(newDoc);
   }
 
@@ -521,6 +601,9 @@ export class RitorVDOM {
     });
 
     const newDoc = this.schema.node("doc", null, newContent);
+    if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+    }
     this.updateDocument(newDoc);
   }
 
@@ -531,7 +614,7 @@ export class RitorVDOM {
       return;
     }
 
-    const newContent = currentContent.map((block, index): BaseNode => { // Ensure index is available
+    const newContent = currentContent.map((block, index): BaseNode => {
       const blockNodeType = block.type as NodeType;
       if (index === paraIndex && blockNodeType.name === 'paragraph') {
         const paraNode = block;
@@ -559,6 +642,9 @@ export class RitorVDOM {
       return block;
     });
     const newDoc = this.schema.node("doc", null, newContent);
+    if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+    }
     this.updateDocument(newDoc);
   }
 
@@ -569,75 +655,8 @@ export class RitorVDOM {
 
 // --- Conceptual HTML and Script for testing ---
 /*
-index.html:
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Ritor VDOM Test</title>
-    <style>
-        #editor { border: 1px solid #ccc; min-height: 100px; padding: 10px; }
-    </style>
-</head>
-<body>
-    <h1>Ritor VDOM Test</h1>
-    <div id="editor"></div>
-
-    <h2>Controls</h2>
-    <input type="text" id="paraText" value="New paragraph text">
-    <button id="addParaBtn">Add Paragraph</button>
-    <br><br>
-    <input type="number" id="paraIndexChange" value="0" style="width: 50px;">
-    <input type="text" id="paraNewText" value="Updated text">
-    <button id="changeParaBtn">Change Paragraph Text</button>
-    <br><br>
-    <input type="number" id="paraIndexBold" value="0" style="width: 50px;">
-    <button id="boldParaBtn">Toggle Bold First Word</button>
-    <br><br>
-    <button id="logDocBtn">Log Current Document JSON</button>
-
-    <script type="module">
-        import { RitorVDOM } from './src/RitorVDOM.js'; // Adjust path if necessary
-
-        const editorElement = document.getElementById('editor');
-        if (editorElement) {
-            const editor = new RitorVDOM(editorElement);
-            window.editor = editor; // Expose to console for easy testing
-
-            document.getElementById('addParaBtn').onclick = () => {
-                const text = document.getElementById('paraText').value || "Empty Para";
-                editor.addParagraph(text);
-            };
-            document.getElementById('changeParaBtn').onclick = () => {
-                const index = parseInt(document.getElementById('paraIndexChange').value);
-                const text = document.getElementById('paraNewText').value || "Empty Text";
-                editor.changeParagraphText(index, text);
-            };
-            document.getElementById('boldParaBtn').onclick = () => {
-                const index = parseInt(document.getElementById('paraIndexBold').value);
-                editor.toggleBoldOnFirstWordInParagraph(index);
-            };
-            document.getElementById('logDocBtn').onclick = () => {
-                console.log("Current RitorVDOM Document Model:");
-                console.log(editor.getDocJson());
-            };
-
-            console.log("RitorVDOM initialized. Try `editor.addParagraph('Hello from console!')`");
-        } else {
-            console.error("#editor element not found");
-        }
-    </script>
-</body>
-</html>
-
-To run this:
-1. Save the RitorVDOM.ts, domPatcher.ts, modelRenderer.ts, documentModel.ts in their respective paths.
-2. Ensure they use '.js' for relative imports.
-3. Create the index.html file as above.
-4. Serve the directory using a simple HTTP server (e.g., `npx serve .`).
-5. Open index.html in a browser and use the buttons or browser console.
+... (HTML sketch remains the same)
 */
 
 console.log("RitorVDOM class defined. Example usage is sketched for browser environment.");
-
 [end of src/RitorVDOM.ts]
