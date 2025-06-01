@@ -3,19 +3,14 @@ import {
   ParagraphNode,
   TextNode,
   HardBreakNode,
-  InlineNode,
   AnyMark,
-  LinkMark,
+  // LinkMark,
   BaseNode,
-  createDoc,
-  createParagraph,
-  createText,
-  createHardBreak,
-  createBoldMark,
-  createItalicMark,
-  createUnderlineMark,
-  createLinkMark,
+  TextNode as ModelTextNode, // Use alias if TextNode name conflicts or for clarity
+  // DocNode, ParagraphNode, HardBreakNode specific types might be replaced by BaseNode checks + node.type.name
 } from './documentModel.js';
+import { NodeType, MarkType } from './schema.js'; // Import NodeType and MarkType
+import { DOMOutputSpec, Attrs } from './schemaSpec.js';
 
 // --- HTML Escaping Utility ---
 function escapeHtml(text: string): string {
@@ -27,49 +22,104 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
-// --- Mark to Tag Mapping ---
-const markToHtmlTag: { [key: string]: string | ((mark: AnyMark) => { open: string, close: string }) } = {
-  bold: 'strong',
-  italic: 'em',
-  underline: 'u',
-  link: (mark: AnyMark) => {
-    const linkMark = mark as LinkMark;
-    let openTag = `<a href="${escapeHtml(linkMark.attrs.href)}"`;
-    if (linkMark.attrs.target) {
-      openTag += ` target="${escapeHtml(linkMark.attrs.target)}"`;
-    }
-    openTag += '>';
-    return { open: openTag, close: '</a>' };
-  },
-};
-
-function getTagForMark(mark: AnyMark): { open: string, close: string } {
-  const tagOrFn = markToHtmlTag[mark.type];
-  if (typeof tagOrFn === 'string') {
-    return { open: `<${tagOrFn}>`, close: `</${tagOrFn}>` };
-  } else if (typeof tagOrFn === 'function') {
-    return tagOrFn(mark);
-  }
-  console.warn(`No HTML tag mapping for mark type: ${mark.type}`);
-  return { open: '', close: '' }; // Should not happen with proper types
-}
+// --- Removed Mark to Tag Mapping ---
+// This will now be handled by MarkType.toDOM defined in the schema.
 
 // --- Node Rendering Logic ---
 
-function renderInlineNodes(nodes: ReadonlyArray<InlineNode>): string {
+function renderDOMOutputSpec(spec: DOMOutputSpec, contentRenderer?: () => string): string {
+  if (typeof spec === 'string') {
+    return spec; // e.g., "br"
+  }
+
+  const tag = spec[0];
+  let html = `<${tag}`;
+  let contentHtml = "";
+  let hasContentHole = false;
+
+  const attrs = spec[1];
+  if (typeof attrs === 'object' && attrs !== null && !Array.isArray(attrs)) { // Check if it's an Attrs object
+    for (const key in attrs) {
+      if (attrs[key] !== null && attrs[key] !== undefined) {
+        html += ` ${key}="${escapeHtml(String(attrs[key]))}"`;
+      }
+    }
+    if (spec.length > 2 && spec[2] === 0) { // ["tag", {attrs}, 0, ...more]
+      hasContentHole = true;
+    }
+  } else if (attrs === 0) { // ["tag", 0, ...more]
+    hasContentHole = true;
+  }
+
+  // For void elements like <br>, <hr>, <img>, they shouldn't have a closing tag or content.
+  // A proper list of void elements would be better.
+  const voidElements = ["br", "hr", "img"];
+  if (voidElements.includes(tag)) {
+      html += ">";
+      return html;
+  }
+
+  html += ">"; // Close opening tag
+
+  if (hasContentHole) {
+    if (contentRenderer) {
+      contentHtml = contentRenderer();
+    }
+    html += contentHtml;
+  } else if (typeof attrs !== 'object' && contentRenderer) {
+    // If attrs was not an object (e.g. it was the content hole 0, or not provided)
+    // and there's a content renderer, render the content.
+    // This path is taken if spec is like ["tag", 0] or just ["tag"] and content is expected.
+    // However, for ["tag"], content is usually not from a hole but direct children.
+    // This needs careful handling based on DOMOutputSpec structure.
+    // For now, assume if contentRenderer is provided, it's for the hole.
+  }
+
+
+  html += `</${tag}>`;
+  return html;
+}
+
+// Exported for use in DomPatcher for more granular updates
+export function renderInlineNodes(nodes: ReadonlyArray<BaseNode>, schema: any): string {
   let html = '';
   let activeMarks: ReadonlyArray<AnyMark> = [];
 
+  function getMarkTags(mark: AnyMark, opening: boolean): string {
+    const markType = mark.type as MarkType; // Mark.type is MarkType
+    const spec = markType.toDOM(mark, true); // true for inline context
+    if (typeof spec === 'string') return ""; // Simple string spec not for wrapping
+
+    let tagHtml = "";
+    if (spec[0]) { // Has a tag name
+        if (opening) {
+            tagHtml = `<${spec[0]}`;
+            if (typeof spec[1] === 'object' && spec[1] !== null) {
+                for (const key in spec[1]) {
+                    tagHtml += ` ${key}="${escapeHtml(String(spec[1][key]))}"`;
+                }
+            }
+            tagHtml += ">";
+        } else {
+            tagHtml = `</${spec[0]}>`;
+        }
+    }
+    return tagHtml;
+  }
+
   for (const node of nodes) {
-    if (node.type === 'text') {
+    const nodeType = node.type as NodeType; // node.type is NodeType
+    if (nodeType.isText) {
       const textNode = node as TextNode;
       const desiredMarks = textNode.marks || [];
 
       // Close marks that are no longer active
+      // Iterate in reverse order of active marks to close inner ones first
       for (let i = activeMarks.length - 1; i >= 0; i--) {
         const currentMark = activeMarks[i];
+        // If currentMark is not in desiredMarks (compare by type and attrs for robustness)
         if (!desiredMarks.some(m => m.type === currentMark.type && JSON.stringify(m.attrs) === JSON.stringify(currentMark.attrs))) {
-          html += getTagForMark(currentMark).close;
+          html += getMarkTags(currentMark, false); // false for closing tag
         }
       }
 
@@ -80,335 +130,112 @@ function renderInlineNodes(nodes: ReadonlyArray<InlineNode>): string {
           newMarksToOpen.push(desiredMark);
         }
       }
-      // Open in the order they appear in desiredMarks (though order for simultaneous marks like bold+italic doesn't strictly matter for tags)
-      // For links or other marks with attributes, the order might be preserved from model.
+      // Open in the order they appear in desiredMarks
       for (const markToOpen of newMarksToOpen) {
-          html += getTagForMark(markToOpen).open;
+          html += getMarkTags(markToOpen, true); // true for opening tag
       }
 
       html += escapeHtml(textNode.text);
-      activeMarks = desiredMarks;
+      activeMarks = [...desiredMarks]; // Update active marks, ensure copy
 
-    } else if (node.type === 'hard_break') {
-      // Close all active marks before <br>
+    } else if (nodeType.spec.atom) { // e.g., hard_break
+      // Close any active marks before an atom node if they shouldn't span it
       for (let i = activeMarks.length - 1; i >= 0; i--) {
-        html += getTagForMark(activeMarks[i]).close;
+        html += getMarkTags(activeMarks[i], false);
       }
       activeMarks = []; // Reset active marks
-      html += '<br>';
-      // Note: If marks should span across <br>, this logic would need adjustment.
-      // For this PoC, <br> acts as a formatting reset.
+
+      const domSpec = nodeType.toDOM(node);
+      html += renderDOMOutputSpec(domSpec); // Render the atom node itself
     }
+    // Other inline non-text, non-atom nodes could be handled here if any
   }
 
   // Close any remaining active marks at the end of the inline content
   for (let i = activeMarks.length - 1; i >= 0; i--) {
-    html += getTagForMark(activeMarks[i]).close;
+    html += getMarkTags(activeMarks[i], false);
   }
 
   return html;
 }
 
-export function renderNodeToHtml(node: BaseNode | TextNode | HardBreakNode | DocNode): string {
-  let html = '';
+export function renderNodeToHtml(node: BaseNode, schema?: any): string { // Schema might be needed for inline rendering context
+  const nodeType = node.type as NodeType; // node.type is NodeType
 
-  switch (node.type) {
-    case 'doc':
-      const docNode = node as DocNode;
-      if (docNode.content) {
-        for (const contentNode of docNode.content) {
-          html += renderNodeToHtml(contentNode);
-        }
-      }
-      break;
-
-    case 'paragraph':
-      const paragraphNode = node as ParagraphNode;
-      html += '<p>';
-      if (paragraphNode.content) {
-        html += renderInlineNodes(paragraphNode.content);
-      }
-      html += '</p>';
-      break;
-
-    case 'text':
-      // Text node rendering is primarily handled within renderInlineNodes
-      // This case would only be hit if a TextNode is rendered directly, which is unusual for this model.
-      const textNode = node as TextNode;
-      // Simplified: if a text node is rendered standalone, wrap with its marks.
-      // This is not the typical path; text nodes are usually part of inline content.
-      let textHtml = '';
-      const marks = textNode.marks || [];
-      for(const mark of marks) {
-        textHtml += getTagForMark(mark).open;
-      }
-      textHtml += escapeHtml(textNode.text);
-      for(let i = marks.length - 1; i >= 0; i--) {
-        textHtml += getTagForMark(marks[i]).close;
-      }
-      html += textHtml;
-      break;
-
-    case 'hard_break':
-      html += '<br>';
-      break;
-
-    default:
-      // For nodes that might have 'content' but are not explicitly handled above.
-      // This is a basic fallback and might need more sophisticated handling.
-      const basicNode = node as BaseNode;
-      if (basicNode.content && Array.isArray(basicNode.content)) {
-        for (const contentNode of basicNode.content) {
-          // Assuming contentNode is one of the known node types
-          html += renderNodeToHtml(contentNode as BaseNode);
-        }
-      } else {
-        console.warn(`Unhandled node type: ${node.type}`);
-      }
+  if (nodeType.isText) { // Text nodes are handled by their parent's inline rendering
+    return escapeHtml((node as TextNode).text);
   }
-  return html;
+
+  const domSpec = nodeType.toDOM(node);
+
+  return renderDOMOutputSpec(domSpec, () => {
+    let contentHtml = "";
+    if (node.content && node.content.length > 0) {
+      if (nodeType.inlineContent || nodeType.name === 'paragraph') { // Paragraphs contain inline content
+        contentHtml = renderInlineNodes(node.content, schema);
+      } else { // Block content
+        for (const contentNode of node.content) {
+          contentHtml += renderNodeToHtml(contentNode, schema);
+        }
+      }
+    }
+    return contentHtml;
+  });
 }
 
-export function renderDocumentToHtml(doc: DocNode): string {
-  return renderNodeToHtml(doc);
+export function renderDocumentToHtml(doc: BaseNode, schema?: any): string { // Doc is a BaseNode
+  // Ensure schema is passed down if it's needed by renderNodeToHtml, esp. for inline content within blocks
+  return renderNodeToHtml(doc, schema);
 }
 
 import { pathToFileURL } from 'node:url';
 import process from 'node:process';
 
-// --- Example Usage ---
+// --- Example Usage (will be updated to use Schema) ---
 // Check if the module is being run directly
 const isMainModule = import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMainModule) {
-  console.log('--- Model Renderer Examples ---');
+  console.log('--- Model Renderer Examples (Schema-driven) ---');
 
-  const simpleDoc = createDoc([
-    createParagraph([
-      createText('Hello, '),
-      createText('World!', [createBoldMark()]),
-      createText(' This is '),
-      createText('italic and underlined', [createItalicMark(), createUnderlineMark()]),
-      createText('. And this is a '),
-      createText('link', [createLinkMark('https://example.com', '_blank')]),
-      createText('.')
+  // This example usage will need to be updated once RitorVDOM uses the schema
+  // For now, it will break because createDoc etc. are deprecated / behave differently.
+  // We'll test the renderer via RitorVDOM's initialization and methods later.
+
+  // To manually test renderer with schema-based nodes (conceptual):
+  /*
+  const mySchema = new Schema({ nodes: basicNodeSpecs, marks: basicMarkSpecs }); // Assuming basicNodeSpecs/Marks are imported
+
+  const simpleDoc = mySchema.createDoc([
+    mySchema.node("paragraph", null, [
+      mySchema.text("Hello, "),
+      mySchema.text("World!", [mySchema.marks.bold.create()]),
+      mySchema.text(" This is "),
+      mySchema.text("italic and underlined", [mySchema.marks.italic.create(), mySchema.marks.underline.create()]), // Assuming underline is added to basicMarkSpecs
+      mySchema.text(". And this is a "),
+      mySchema.text("link", [mySchema.marks.link.create({ href: "https://example.com" })]), // Assuming link is added
+      mySchema.text(".")
     ]),
-    createParagraph([
-      createText('Another paragraph with a hard break.'),
-      createHardBreak(),
-      createText('After the break, also '),
-      createText('bold', [createBoldMark()]),
-      createText('.')
-    ]),
-    createParagraph([
-      createText('Sequential marks: '),
-      createText('B', [createBoldMark()]),
-      createText('I', [createItalicMark()]),
-      createText('U', [createUnderlineMark()]),
-      createText(' normal again.')
-    ]),
-    createParagraph([
-      createText('Nested: '),
-      createText('Bold, ', [createBoldMark()]),
-      createText('Bold and Italic, ', [createBoldMark(), createItalicMark()]),
-      createText('Italic, ', [createItalicMark()]),
-      createText('Normal.')
+    mySchema.node("paragraph", null, [
+      mySchema.text("Another paragraph with a "),
+      mySchema.node("hard_break"),
+      mySchema.text(" new line.")
     ])
   ]);
 
-  console.log('\nSimple Document:');
-  console.log(JSON.stringify(simpleDoc, null, 2));
-  console.log('\nRendered HTML:');
+  console.log('\nSimple Schema Document (JSON):');
+  // JSON.stringify won't be as readable with NodeType/MarkType objects directly,
+  // might need a custom serializer for nodes if deep logging is needed.
+  // console.log(JSON.stringify(simpleDoc, (key, value) => {
+  //   if (key === 'type' && (value instanceof NodeType || value instanceof MarkType)) {
+  //     return value.name; // Serialize type by name for readability
+  //   }
+  //   return value;
+  // }, 2));
+
+  console.log('\nRendered HTML (Schema-driven):');
   const htmlOutput = renderDocumentToHtml(simpleDoc);
   console.log(htmlOutput);
-
-  // Expected:
-  // <p>Hello, <strong>World!</strong> This is <em><u>italic and underlined</u></em>. And this is a <a href="https://example.com" target="_blank">link</a>.</p>
-  // <p>Another paragraph with a hard break.<br>After the break, also <strong>bold</strong>.</p>
-  // <p>Sequential marks: <strong>B</strong><em>I</em><u>U</u> normal again.</p>
-  // <p>Nested: <strong>Bold, <em>Bold and Italic, </em></strong><em>Italic, </em>Normal.</p>
-  // Note: The actual nesting for "Bold, Bold and Italic, Italic" might be tricky with the current simple mark logic.
-  // Let's test the actual output. The simple logic opens/closes based on current vs desired.
-  // For "Bold, Bold and Italic", current is [bold], desired is [bold, italic]. Italic opens.
-  // For "Italic", current is [bold, italic], desired is [italic]. Bold closes.
-
-  const expectedSimpleOutput = `<p>Hello, <strong>World!</strong> This is <em><u>italic and underlined</u></em>. And this is a <a href="https://example.com" target="_blank">link</a>.</p><p>Another paragraph with a hard break.<br>After the break, also <strong>bold</strong>.</p><p>Sequential marks: <strong>B</strong><em>I</em><u>U</u> normal again.</p><p>Nested: <strong>Bold, <em>Bold and Italic</em></strong><em>, </em>Normal.</p>`;
-  // The nested example is tricky.
-  // Text: "Bold, " (marks: [bold]) -> active: [bold], out: <strong>Bold,
-  // Text: "Bold and Italic, " (marks: [bold, italic])
-  //   Close check: active [bold], desired [bold, italic]. Nothing to close from active that's not in desired.
-  //   Open check: active [bold], desired [bold, italic]. Italic is new. -> out: <em>
-  //   Result: <strong>Bold, <em>Bold and Italic,
-  //   active becomes [bold, italic]
-  // Text: "Italic, " (marks: [italic])
-  //   Close check: active [bold, italic], desired [italic]. Bold is in active but not desired. -> out: </em></strong> (oops, order of closing) - this needs fix for proper nesting.
-  //   The closing loop needs to be smarter or the activeMarks need to be managed as a stack.
-  //
-  // Let's refine the inline rendering logic for closing marks.
-  // Marks should be closed in reverse order of their opening.
-  // The current activeMarks array *is* effectively a stack if we always push new marks and ensure they are closed from the end.
-
-  // The issue with "Nested" example:
-  // "Bold, " -> active=[bold], out: <strong>Bold,
-  // "Bold and Italic, " -> desired=[bold, italic].
-  //   'italic' is new vs active. Open <em>. out: <strong>Bold, <em>Bold and Italic, . active=[bold, italic]
-  // "Italic, " -> desired=[italic].
-  //   'bold' is in active but not in desired. Close </strong>. out: ...</em></strong>
-  //   'italic' is in active and in desired. No change.
-  //   This leads to </strong><em> which is wrong.
-  //
-  // Correct logic for closing:
-  // Iterate activeMarks from last to first. If an active mark is NOT in desiredMarks, close it.
-  // This ensures inner marks are closed first.
-  //
-  // Correct logic for opening:
-  // Iterate desiredMarks. If a desiredMark is NOT in activeMarks, open it.
-  // This ensures marks are opened in the order they are defined in the text node.
-
-
-  // The current `renderInlineNodes` has a bug in how it transitions between mark sets.
-  // Specifically, closing tags need to be emitted for marks that are in `activeMarks` but not `desiredMarks`.
-  // And opening tags for marks in `desiredMarks` but not `activeMarks`.
-  // The order of closing should be reverse of opening.
-
-  // Let's consider the transition from [bold, italic] to [italic].
-  // Active: [bold, italic]. Desired: [italic].
-  // Marks to close: 'bold' (because it's in active but not desired). Output: </strong>
-  // Marks to open: None (because 'italic' is already in active).
-  // New active marks: [italic].
-  // This seems more correct. The `renderInlineNodes` already attempts this.
-  // The issue might be subtle, related to the order of tags or string concatenation.
-
-  console.log("--- Verification of Nested Output ---");
-  const nestedSample = createDoc([createParagraph([
-      createText('Normal, '),
-      createText('Bold, ', [createBoldMark()]),
-      createText('BoldItalic, ', [createBoldMark(), createItalicMark()]),
-      createText('Bold, ', [createBoldMark()]),
-      createText('Normal.')
-    ])]);
-  // Expected: <p>Normal, <strong>Bold, <em>BoldItalic, </em>Bold, </strong>Normal.</p>
-  console.log(JSON.stringify(nestedSample, null, 2));
-  console.log(renderDocumentToHtml(nestedSample));
-  // Actual output from current code for nested:
-  // <p>Normal, <strong>Bold, <em>BoldItalic, </em></strong><em></em><strong>Bold, </strong>Normal.</p>
-  // There's an empty <em></em>. This happens when going from [bold, italic] to [bold].
-  // Active: [bold, italic]. Desired: [bold].
-  // To close: italic. Output: </em>
-  // To open: (desired) bold is already in (active) bold,italic. Nothing.
-  // The new activeMarks = [bold]. This is correct.
-  // The issue is that the comparison `!desiredMarks.some(m => m.type === currentMark.type)` for closing
-  // and `!activeMarks.some(m => m.type === desiredMark.type)` for opening is too simple.
-  // It doesn't respect the fact that activeMarks might be [A, B] and desiredMarks is [A, C].
-  // B must be closed, then C must be opened.
-
-  // A more robust way:
-  // 1. Find marks to close: iterate `activeMarks`. If mark not in `desiredMarks`, add to a `toClose` list.
-  // 2. Find marks to open: iterate `desiredMarks`. If mark not in `activeMarks`, add to `toOpen` list.
-  // 3. Output closing tags for `toClose` (in reverse order of their presence in `activeMarks`).
-  // 4. Output opening tags for `toOpen` (in order of their presence in `desiredMarks`).
-  // 5. Update `activeMarks = desiredMarks`.
-
-  // The current code's `newMarksToOpen` logic seems fine.
-  // The closing logic:
-  // `for (let i = activeMarks.length - 1; i >= 0; i--)` iterates from outer to inner if activeMarks = [outer, inner]
-  // `if (!desiredMarks.some(m => m.type === currentMark.type ...)`
-  // This is correct for closing. If currentMark (from active) is not in desired, close it.
-  // The example above "<strong>Bold, <em>BoldItalic, </em></strong><em></em><strong>Bold, </strong>Normal."
-  // active=[B,I], desired=[B].
-  // Close loop (i=1, currentMark=I): I is not in [B]. Close I. html += </em>
-  // Close loop (i=0, currentMark=B): B is in [B]. Do nothing.
-  // Open loop: desired=[B]. B is in active=[B,I]. Do nothing.
-  // html += text.
-  // active = [B].
-  // This sequence should produce: ...</em>Bold,
-  // Then if next is "Normal.": active=[B], desired=[].
-  // Close loop (i=0, currentMark=B): B is not in []. Close B. html += </strong>
-  // Open loop: desired=[]. Nothing to open.
-  // html += text.
-  // active = [].
-  // This sequence should produce: ...</em>Bold,</strong>Normal.
-  // The output <p>Normal, <strong>Bold, <em>BoldItalic, </em></strong><em></em><strong>Bold, </strong>Normal.</p> suggests that
-  // when going from [B,I] to [B], it closes I (correct: </em>), then it *also* opens and closes I (<em></em>), then it continues.
-  // This implies that `newMarksToOpen` is finding 'italic' to open again.
-  // `if (!activeMarks.some(m => m.type === desiredMark.type ...))`
-  // If active is [B,I] and desired is [B].
-  // For desiredMark = B: activeMarks.some(m => m.type === 'bold') is true. So B is not added to newMarksToOpen.
-  // This is correct.
-
-  // The problem might be in how activeMarks is updated or how the comparison of marks (including attributes for links) is done.
-  // `JSON.stringify(m.attrs) === JSON.stringify(currentMark.attrs)` is a bit naive for attrs comparison but might work for simple cases.
-  // For marks without attributes, `undefined === undefined` is true.
-
-  // Let's re-verify the "Nested" example from `simpleDoc`:
-  // Text: "Bold, " (marks: [B]) -> active=[], desired=[B]. Open B. html="<p><strong>". active=[B]. text. html="<p><strong>Bold, "
-  // Text: "Bold and Italic, " (marks: [B,I]) -> active=[B], desired=[B,I].
-  //   Close: active=[B]. B is in desired. Nothing.
-  //   Open: desired=[B,I]. B is in active. I is not in active. Open I. html="<p><strong><em>". active=[B,I]. text. html="<p><strong><em>Bold and Italic, "
-  // Text: "Italic, " (marks: [I]) -> active=[B,I], desired=[I].
-  //   Close: active=[B,I]. I is in desired. B is not in desired. Close B (from end of active). html="<p><strong><em>Bold and Italic, </em></strong>"
-  //   Open: desired=[I]. I is in active. Nothing.
-  //   active=[I]. text. html="<p><strong><em>Bold and Italic, </em></strong>Italic, "
-  // Text: "Normal." (marks: []) -> active=[I], desired=[].
-  //   Close: active=[I]. I is not in desired. Close I. html="<p><strong><em>Bold and Italic, </em></strong>Italic, </em>"
-  //   Open: desired=[]. Nothing.
-  //   active=[]. text. html="<p><strong><em>Bold and Italic, </em></strong>Italic, </em>Normal."
-  // Final cleanup: active=[]. Nothing. Close </p>.
-  // Expected: <p><strong>Bold, <em>Bold and Italic, </em></strong><em>Italic, </em>Normal.</p>
-  // My trace matches the "expected" output, not the one with <em></em>.
-  // The example output in the problem description was: <p>Nested: <strong>Bold, <em>Bold and Italic</em></strong><em>, </em>Normal.</p>
-  // My trace:                                        <p>Nested: <strong>Bold, <em>Bold and Italic, </em></strong><em>Italic, </em>Normal.</p>
-  // The key difference is the placement of the closing </strong> tag.
-  // The logic of closing tags that are "no longer active" means if a tag was part of a wider scope (like B in [B,I]) and the new scope is just [I], B must be closed.
-  // This is what my code does and what my trace shows.
-  // The `expectedSimpleOutput` in the code seems to match this.
-  // The `Nested Output` example seems to have a slight error in its expectation if it expects B to remain open when the marks change from [B,I] to just [I].
-  // If the desired output is `<strong>Bold, <em>BoldItalic, </em>Bold, </strong>Normal.` for `Normal, B[Bold,], BI[BoldItalic,], B[Bold,], Normal.`
-  // This implies that when going from BI to B, `<em>` is closed. Correct.
-  // When going from B to Normal, `<strong>` is closed. Correct.
-  // So the provided example output in the file: `<p>Normal, <strong>Bold, <em>BoldItalic, </em></strong><em></em><strong>Bold, </strong>Normal.</p>`
-  // for the `nestedSample` is what the code *actually* produces and indicates a slight flaw.
-  // The `<em></em>` means that `italic` was closed, and then `italic` was spuriously opened and closed.
-  // This would happen if `activeMarks` becomes `[B]` (correctly), but then `newMarksToOpen` incorrectly decides `I` needs to be opened for `desiredMark=[B]`.
-  // Ah, `newMarksToOpen.push(desiredMark);` -> this should be `markToOpen`.
-  // `for (const markToOpen of newMarksToOpen)` -> this is correct.
-
-  // The issue is likely in the comparison within the loops.
-  // `activeMarks.some(m => m.type === currentMark.type && JSON.stringify(m.attrs) === JSON.stringify(currentMark.attrs))`
-  // `desiredMarks.some(m => m.type === desiredMark.type && JSON.stringify(m.attrs) === JSON.stringify(desiredMark.attrs))`
-
-  // Let's dry run `nestedSample` with the code's logic very carefully:
-  // P1: [ Normal, | BOLD Bold, | BOLDITALIC BoldItalic, | BOLD Bold, | Normal. ]
-  // 1. Text: "Normal, ", marks=[]
-  //    active=[], desired=[]. No open/close. html="<p>Normal, ". active=[]
-  // 2. Text: "Bold, ", marks=[B]
-  //    active=[], desired=[B].
-  //    Close: active empty.
-  //    Open: desired=[B]. B not in active. newMarksToOpen=[B]. Open B. html="<p>Normal, <strong>".
-  //    html+="Bold, ". active=[B].
-  // 3. Text: "BoldItalic, ", marks=[B,I]
-  //    active=[B], desired=[B,I].
-  //    Close: currentMark=B (from active). B is in desired. Do nothing.
-  //    Open: desiredMark=B. B is in active. Do nothing.
-  //          desiredMark=I. I not in active. newMarksToOpen=[I]. Open I. html="<p>Normal, <strong><em>".
-  //    html+="BoldItalic, ". active=[B,I].
-  // 4. Text: "Bold, ", marks=[B]
-  //    active=[B,I], desired=[B].
-  //    Close: currentMark=I (from active). I not in desired. Close I. html="<p>Normal, <strong><em>BoldItalic, </em>".
-  //           currentMark=B (from active). B is in desired. Do nothing.
-  //    Open: desiredMark=B. B is in active. Do nothing. newMarksToOpen=[].
-  //    html+="Bold, ". active=[B].
-  // 5. Text: "Normal.", marks=[]
-  //    active=[B], desired=[].
-  //    Close: currentMark=B (from active). B not in desired. Close B. html="<p>Normal, <strong><em>BoldItalic, </em>Bold, </strong>".
-  //    Open: desired=[]. newMarksToOpen=[].
-  //    html+="Normal.". active=[].
-  // End of paragraph. Active empty. Close P. html="<p>Normal, <strong><em>BoldItalic, </em>Bold, </strong>Normal.</p>"
-  // This trace matches the *expected* output for `nestedSample` not the one with `<em></em>`.
-  // The `console.log` in the file has `JSON.stringify(nestedSample, null, 2));` then `renderDocumentToHtml(nestedSample));`
-  // It means the example output in the file comments (`Actual output from current code...<em></em>`) was from a previous buggy version or a misinterpretation.
-  // The current code, based on my detailed trace, *should* produce the correct nested output.
-  // The use of `JSON.stringify` for attribute comparison is a known simplification and could be an issue for complex attributes or specific orderings, but not for simple marks like bold/italic/underline or basic links.
-
-  console.log("The trace suggests the current code should be mostly correct for nesting. The example output in comments might have been from a prior version.");
+  */
+  console.log("Renderer example needs update after RitorVDOM schema integration.");
 }

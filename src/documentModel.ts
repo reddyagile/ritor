@@ -1,137 +1,84 @@
-// --- Mark Definitions ---
+// src/documentModel.ts
+import type { NodeType, MarkType } from './schema.js'; // Use type import for circular dependency avoidance if necessary at runtime
+import type { Attrs } from './schemaSpec.js'; // Attrs type
 
+// Base Mark Interface - now links to MarkType
 export interface Mark {
-  readonly type: string;
-  readonly attrs?: { [key: string]: any };
+  readonly type: MarkType; // Changed from string to MarkType
+  readonly attrs: Attrs;
 }
 
+// Specific mark interfaces can still exist for type narrowing if needed,
+// but their `type` property will be a MarkType instance.
 export interface BoldMark extends Mark {
-  readonly type: 'bold';
+  readonly type: MarkType & { name: 'bold' }; // Example of narrowing if type name is fixed
 }
-
 export interface ItalicMark extends Mark {
-  readonly type: 'italic';
+  readonly type: MarkType & { name: 'italic' };
 }
-
 export interface UnderlineMark extends Mark {
-  readonly type: 'underline';
+  readonly type: MarkType & { name: 'underline' };
 }
-
 export interface LinkMark extends Mark {
-  readonly type: 'link';
+  readonly type: MarkType & { name: 'link' };
   readonly attrs: {
     href: string;
     target?: string;
-  };
+  } & Attrs; // Ensure it includes base Attrs structure if any
 }
 
-// Union type for all supported marks
-export type AnyMark = BoldMark | ItalicMark | UnderlineMark | LinkMark;
+export type AnyMark = Mark; // Generic Mark is now sufficient, specific types for convenience
 
-// --- Node Definitions ---
-
+// Base Node Interface - now links to NodeType
 export interface BaseNode {
-  readonly type: string;
-  readonly attrs?: { [key: string]: any };
-  readonly content?: ReadonlyArray<BaseNode | TextNode | HardBreakNode>; // General content for block nodes
+  readonly type: NodeType; // Changed from string to NodeType
+  readonly attrs: Attrs; // attrs.id will store the unique ID for block nodes
+  readonly content?: ReadonlyArray<BaseNode>; // Content is always BaseNode array
+  readonly marks?: ReadonlyArray<AnyMark>; // Marks for inline content, esp. TextNode
+  // id?: string; // This was considered but ID should be part of attrs for schema consistency
 }
 
+// TextNode now also uses NodeType
 export interface TextNode extends BaseNode {
-  readonly type: 'text';
+  readonly type: NodeType & { name: 'text' }; // Example of narrowing
   readonly text: string;
-  readonly marks?: ReadonlyArray<AnyMark>;
-  readonly content?: undefined; // Text nodes do not have content
+  // Marks are on BaseNode now, particularly relevant for TextNode
+  // readonly content?: undefined; // Text nodes should not have content in this model
 }
 
+// HardBreakNode - type also becomes NodeType
 export interface HardBreakNode extends BaseNode {
-  readonly type: 'hard_break';
-  readonly content?: undefined; // HardBreak nodes do not have content
+  readonly type: NodeType & { name: 'hard_break' };
+  // readonly content?: undefined;
 }
 
-// Union type for inline nodes
-export type InlineNode = TextNode | HardBreakNode; // Add other inline nodes like ImageNode here later
+export type InlineNode = BaseNode; // Generic BaseNode can represent inline nodes, type.isInline check
+export type BlockNode = BaseNode;  // Generic BaseNode can represent block nodes, type.isBlock check
 
-export interface ParagraphNode extends BaseNode {
-  readonly type: 'paragraph';
-  readonly content: ReadonlyArray<InlineNode>; // Paragraphs specifically contain InlineNodes
-}
-
-// Union type for block nodes (add HeadingNode, BlockquoteNode, ListNode etc. here later)
-export type BlockNode = ParagraphNode;
-
+// DocNode - type also becomes NodeType
 export interface DocNode extends BaseNode {
-  readonly type: 'doc';
-  readonly content: ReadonlyArray<BlockNode>; // Document specifically contains BlockNodes
+  readonly type: NodeType & { name: 'doc' };
+  readonly content: ReadonlyArray<BlockNode>;
 }
 
-// --- Factory Functions ---
 
-// Marks
-export function createBoldMark(): BoldMark {
-  return { type: 'bold' };
-}
-
-export function createItalicMark(): ItalicMark {
-  return { type: 'italic' };
-}
-
-export function createUnderlineMark(): UnderlineMark {
-  return { type: 'underline' };
-}
-
-export function createLinkMark(href: string, target?: string): LinkMark {
-  return { type: 'link', attrs: { href, target } };
-}
-
-// Nodes
-export function createText(text: string, marks?: ReadonlyArray<AnyMark>): TextNode {
-  return { type: 'text', text, marks: marks || [] };
-}
-
-export function createHardBreak(): HardBreakNode {
-  return { type: 'hard_break' };
-}
-
-export function createParagraph(content: ReadonlyArray<InlineNode>): ParagraphNode {
-  return { type: 'paragraph', content };
-}
-
-export function createDoc(content: ReadonlyArray<BlockNode>): DocNode {
-  return { type: 'doc', content };
-}
-
-// --- Explanation ---
+// --- Deprecated Factory Functions ---
+// These will be replaced by schema.node() and schema.text() methods.
+// Keeping them here commented out or removed shows the transition.
 
 /*
-How this model aims to address:
+export function createBoldMark(): BoldMark { ... }
+export function createItalicMark(): ItalicMark { ... }
+export function createUnderlineMark(): UnderlineMark { ... }
+export function createLinkMark(href: string, target?: string): LinkMark { ... }
 
-1.  Consistent HTML Output:
-    *   **Structured Representation:** The model provides a well-defined, hierarchical structure for the document content. Each node and mark has a specific type and allowed content/attributes.
-    *   **Controlled Rendering:** When converting this model to HTML, the rendering logic can iterate through this structure and deterministically generate corresponding HTML tags and attributes. Since the model is the single source of truth, variations in how users might create similar-looking content (e.g., multiple spaces vs. paragraph breaks) can be normalized within the model or during its construction.
-    *   **Schema Enforcement:** The TypeScript interfaces enforce the shape of the document. This means any logic that creates or manipulates the document model must adhere to this schema, reducing the chances of malformed structures that could lead to inconsistent HTML. For instance, a 'paragraph' node can only contain 'inline' content.
-
-2.  Providing a Foundation for Undo/Redo:
-    *   **Immutability:** The factory functions create objects that are intended to be immutable (properties are `readonly`, content arrays are `ReadonlyArray`). While true deep immutability isn't enforced without libraries, the design leans towards it.
-    *   **State Snapshots:** An undo/redo system can operate by storing snapshots of the `DocNode` (the entire document state) at different points in time. When a user performs an action, a new version of the `DocNode` is created (leveraging structural sharing where possible if full immutability is achieved).
-    *   **Action-Based History:** Alternatively, instead of full snapshots, one could record "transformations" or "operations" that describe changes from one state of the model to the next. Applying the inverse of these operations would allow undoing, and reapplying them would allow redoing. The structured nature of the model makes defining and applying such transformations more reliable than direct DOM manipulation history.
-    *   **Serialization:** The model, being a plain JavaScript object structure, can be easily serialized (e.g., to JSON). This is useful for storing history states or for more complex undo/redo mechanisms that might involve diffing states.
+export function createText(text: string, marks?: ReadonlyArray<AnyMark>): TextNode { ... }
+export function createHardBreak(): HardBreakNode { ... }
+export function createParagraph(content: ReadonlyArray<InlineNode>): ParagraphNode { ... }
+export function createDoc(content: ReadonlyArray<BlockNode>): DocNode { ... }
 */
-// console.log("Document model definitions and factory functions created."); // Commented out for cleaner renderer output
 
-// Example Usage (for testing, not part of the final file usually)
-/*
-const sampleDoc = createDoc([
-  createParagraph([
-    createText("Hello ", [createBoldMark()]),
-    createText("World!", [createItalicMark()]),
-  ]),
-  createParagraph([
-    createText("This is a link: "),
-    createText("Google", [createLinkMark("http://google.com")]),
-    createHardBreak(),
-    createText("New line after hard break.")
-  ])
-]);
+// The explanation of how the model addresses HTML consistency and undo/redo
+// is still valid but now operates in conjunction with the Schema.
 
-console.log(JSON.stringify(sampleDoc, null, 2));
-*/
+console.log("documentModel.ts refactored: Node/Mark interfaces now link to NodeType/MarkType. Factory functions are deprecated.");
