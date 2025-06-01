@@ -1,6 +1,6 @@
 // src/transform/transaction.ts
 
-import { DocNode, BaseNode } from '../documentModel.js';
+import { DocNode, BaseNode, Mark, MarkType } from '../documentModel.js'; // Added Mark, MarkType
 import { Schema } from '../schema.js';
 import { Step, StepResult } from './step.js';
 import { ReplaceStep } from './replaceStep.js';
@@ -9,6 +9,8 @@ import { ModelSelection, ModelPosition } from '../selection.js';
 import { StepMap } from './stepMap.js';
 import { Mapping } from './mapping.js';
 import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../modelUtils.js'; // Ensure correct path
+import { AddMarkStep } from './addMarkStep.js'; // Import AddMarkStep
+import { RemoveMarkStep } from './removeMarkStep.js'; // Import RemoveMarkStep
 
 export class Transaction {
     public originalDoc: DocNode;
@@ -127,6 +129,28 @@ export class Transaction {
     getMeta(key: string): any {
         return this.meta.get(key);
     }
+
+    // --- Mark-related convenience methods ---
+
+    /**
+     * Adds an AddMarkStep to the transaction.
+     * @param from Flat start position of the range.
+     * @param to Flat end position of the range.
+     * @param mark The mark to add.
+     */
+    addMark(from: number, to: number, mark: Mark): this {
+        return this.addStep(new AddMarkStep(from, to, mark));
+    }
+
+    /**
+     * Adds a RemoveMarkStep to the transaction.
+     * @param from Flat start position of the range.
+     * @param to Flat end position of the range.
+     * @param markOrType The specific mark instance to remove, or a MarkType to remove all marks of that type.
+     */
+    removeMark(from: number, to: number, markOrType: Mark | MarkType): this {
+        return this.addStep(new RemoveMarkStep(from, to, markOrType));
+    }
 }
 
-console.log("transform/transaction.ts updated for schema param and refined selection mapping.");
+console.log("transform/transaction.ts updated with addMark/removeMark methods.");

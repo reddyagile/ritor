@@ -7,7 +7,10 @@ import {
   TextNode as ModelTextNode,
   AnyMark as ModelAnyMark,
   // We'll need a generic way to create these or specific factories if they remain distinct types.
+  ModelAnyMark, // Ensure ModelAnyMark is imported if not already covered by BaseNode etc.
+  // attrsEq, // Attempt to import if it's exported from documentModel.js
 } from './documentModel.js'; // Assuming .js for ESM runtime
+import { attrsEq } from './documentModel.js'; // Explicit import for attrsEq
 
 // Simple unique ID generator for nodes
 let nextNodeId = 1;
@@ -249,10 +252,17 @@ export class MarkType {
 
   public create(attrs?: Attrs): ModelAnyMark {
     const defaultedAttrs = this.defaultAttrs(attrs);
-    return {
-      type: this, // Link to MarkType instance
+    const markInstance: ModelAnyMark = {
+      type: this,
       attrs: defaultedAttrs,
-    } as unknown as ModelAnyMark; // Cast needed as ModelAnyMark expects string type
+      eq(other: ModelAnyMark): boolean {
+        if (this === other) return true;
+        if (!other) return false;
+        // Ensure attrsEq is available here. If not imported, it needs to be defined in this file.
+        return this.type === other.type && attrsEq(this.attrs, other.attrs);
+      }
+    };
+    return markInstance;
   }
 
   private defaultAttrs(attrs?: Attrs): Attrs {

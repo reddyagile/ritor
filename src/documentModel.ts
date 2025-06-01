@@ -6,6 +6,7 @@ import type { Attrs } from './schemaSpec.js'; // Attrs type
 export interface Mark {
   readonly type: MarkType; // Changed from string to MarkType
   readonly attrs: Attrs;
+  eq(other: Mark): boolean; // Method to compare this mark with another
 }
 
 // Specific mark interfaces can still exist for type narrowing if needed,
@@ -85,4 +86,18 @@ export function createDoc(content: ReadonlyArray<BlockNode>): DocNode { ... }
 // The explanation of how the model addresses HTML consistency and undo/redo
 // is still valid but now operates in conjunction with the Schema.
 
-console.log("documentModel.ts refactored: Node/Mark interfaces now link to NodeType/MarkType. Factory functions are deprecated.");
+// Utility function to compare attribute objects (simple equality)
+function attrsEq(attrsA: Attrs, attrsB: Attrs): boolean {
+    if (attrsA === attrsB) return true;
+    if (!attrsA || !attrsB) return false;
+    const keysA = Object.keys(attrsA);
+    const keysB = Object.keys(attrsB);
+    if (keysA.length !== keysB.length) return false;
+    for (const key of keysA) {
+        if (attrsA[key] !== attrsB[key]) return false;
+    }
+    return true;
+}
+
+
+console.log("documentModel.ts updated: Mark interface now includes eq method. Factory functions are deprecated.");
