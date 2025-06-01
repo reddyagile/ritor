@@ -87,7 +87,7 @@ export function createDoc(content: ReadonlyArray<BlockNode>): DocNode { ... }
 // is still valid but now operates in conjunction with the Schema.
 
 // Utility function to compare attribute objects (simple equality)
-function attrsEq(attrsA: Attrs, attrsB: Attrs): boolean {
+export function attrsEq(attrsA: Attrs, attrsB: Attrs): boolean {
     if (attrsA === attrsB) return true;
     if (!attrsA || !attrsB) return false;
     const keysA = Object.keys(attrsA);

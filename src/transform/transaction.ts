@@ -1,23 +1,23 @@
 // src/transform/transaction.ts
 
-import { DocNode, BaseNode, Mark, MarkType } from '../documentModel.js'; // Added Mark, MarkType
+import { DocNode, BaseNode, Mark, MarkType } from '../documentModel.js';
 import { Schema } from '../schema.js';
 import { Step, StepResult } from './step.js';
 import { ReplaceStep } from './replaceStep.js';
 import { Slice } from './slice.js';
 import { ModelSelection, ModelPosition } from '../selection.js';
 import { StepMap } from './stepMap.js';
-import { Mapping } from './mapping.js';
-import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../modelUtils.js'; // Ensure correct path
-import { AddMarkStep } from './addMarkStep.js'; // Import AddMarkStep
-import { RemoveMarkStep } from './removeMarkStep.js'; // Import RemoveMarkStep
+import { Mapping } from './mapping.js'; // Ensure Mapping is imported
+import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../modelUtils.js';
+import { AddMarkStep } from './addMarkStep.js';
+import { RemoveMarkStep } from './removeMarkStep.js';
 
 export class Transaction {
     public originalDoc: DocNode;
-    public doc: DocNode; // Current document state after steps
+    public doc: DocNode;
     public steps: Step[] = [];
-    private maps: StepMap[] = []; // Maps for each step
-    public selection: ModelSelection; // Current selection for this transaction
+    private _mapping: Mapping; // Changed from maps: StepMap[]
+    public selection: ModelSelection;
     private scrolledIntoView: boolean = false;
     private meta: Map<string, any> = new Map();
     public readonly schema: Schema;
@@ -25,34 +25,31 @@ export class Transaction {
     constructor(doc: DocNode, initialSelection?: ModelSelection) {
         this.originalDoc = doc;
         this.doc = doc;
-        this.schema = doc.type.schema; // Assuming NodeType has a reference to its Schema
+        this.schema = doc.type.schema;
+        this._mapping = Mapping.identity; // Initialize with identity mapping
 
         if (initialSelection) {
             this.selection = initialSelection;
         } else {
-            // Default selection: start of the document (flat offset 0 or 1, depending on model)
-            // For our model, flat offset 1 is usually the start of content in the first block.
-            // If doc is empty, flat offset 0 is {path:[], offset:0}
-            const defaultFlatOffset = doc.content.length === 0 ? 0 : 1;
+            const defaultFlatOffset = (doc.content || []).length === 0 ? 0 : 1; // Handle empty doc case for offset
             const defaultPos = flatOffsetToModelPosition(this.doc, defaultFlatOffset, this.schema);
             this.selection = { anchor: defaultPos, head: defaultPos };
         }
     }
 
-    // Adds a step to the transaction. Returns this for chaining.
     addStep(step: Step): this {
-        // The document state before this step is applied is the current `this.doc`.
-        const docBeforeStep = this.doc;
-        const result = step.apply(docBeforeStep); // Apply step to current doc state
+        const docBeforeStep = this.doc; // Document state before this step
+        const result = step.apply(docBeforeStep);
 
         if (result.failed) {
             console.warn("Failed to apply step:", result.failed, step);
             return this;
         }
         if (result.doc && result.map) {
-            this.doc = result.doc; // Update doc state
+            this.doc = result.doc;
             this.steps.push(step);
-            this.maps.push(result.map);
+            this._mapping = this._mapping.appendMap(result.map); // Append StepMap to Mapping
+
             // Map existing selection through the new step's map.
             // The selection was relative to `docBeforeStep`.
             this.selection = this._mapSelection(this.selection, result.map, docBeforeStep);
@@ -60,30 +57,21 @@ export class Transaction {
         return this;
     }
 
-    // Helper to map a selection through a StepMap
-    // `docForFlatConversion` is the document state against which the original ModelPositions of the selection were valid
-    // and against which the StepMap was generated.
     private _mapSelection(sel: ModelSelection, map: StepMap, docForFlatConversion: DocNode): ModelSelection {
         const newAnchor = this._mapPosition(sel.anchor, map, docForFlatConversion);
         const newHead = this._mapPosition(sel.head, map, docForFlatConversion);
         return { anchor: newAnchor, head: newHead };
     }
 
-    // Helper to map a ModelPosition through a StepMap
-    // `docForFlatConversion` is the document state against which the `pos` is currently valid
-    // and against which the `map` was generated.
-    // The result is a ModelPosition valid against `this.doc` (the state after the step).
     private _mapPosition(pos: ModelPosition, map: StepMap, docForFlatConversion: DocNode): ModelPosition {
-        if (!pos) return pos; // Should not happen with valid ModelPosition
+        if (!pos) return pos;
 
         const flatInitial = modelPositionToFlatOffset(docForFlatConversion, pos, this.schema);
         const mappedFlat = map.map(flatInitial);
-        // Resolve the new flat position against the transaction's current (updated) document state
+        // Resolve the new flat position against the transaction's current (updated) document state (`this.doc`)
         return flatOffsetToModelPosition(this.doc, mappedFlat, this.schema);
     }
 
-    // Convenience method to create and add a ReplaceStep
-    // from/to are flat document offsets.
     replace(from: number, to: number, slice: Slice): this {
         const step = new ReplaceStep(from, to, slice);
         return this.addStep(step);
@@ -104,6 +92,8 @@ export class Transaction {
 
     setSelection(selection: ModelSelection): this {
         // TODO: Validate selection against this.doc
+        // (e.g., ensure paths/offsets are within bounds of this.doc)
+        // For now, directly setting it.
         this.selection = selection;
         return this;
     }
@@ -117,8 +107,8 @@ export class Transaction {
         return this.steps.length > 0;
     }
 
-    get mapping(): Mapping { // Combined mapping of all steps
-        return new Mapping(this.maps);
+    get mapping(): Mapping {
+        return this._mapping;
     }
 
     setMeta(key: string, value: any): this {
@@ -130,27 +120,13 @@ export class Transaction {
         return this.meta.get(key);
     }
 
-    // --- Mark-related convenience methods ---
-
-    /**
-     * Adds an AddMarkStep to the transaction.
-     * @param from Flat start position of the range.
-     * @param to Flat end position of the range.
-     * @param mark The mark to add.
-     */
     addMark(from: number, to: number, mark: Mark): this {
         return this.addStep(new AddMarkStep(from, to, mark));
     }
 
-    /**
-     * Adds a RemoveMarkStep to the transaction.
-     * @param from Flat start position of the range.
-     * @param to Flat end position of the range.
-     * @param markOrType The specific mark instance to remove, or a MarkType to remove all marks of that type.
-     */
     removeMark(from: number, to: number, markOrType: Mark | MarkType): this {
         return this.addStep(new RemoveMarkStep(from, to, markOrType));
     }
 }
 
-console.log("transform/transaction.ts updated with addMark/removeMark methods.");
+console.log("transform/transaction.ts updated: uses Mapping, refined selection mapping context.");

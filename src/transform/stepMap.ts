@@ -59,6 +59,20 @@ export class StepMap {
      * Creates an identity StepMap that maps every position to itself.
      */
     static readonly identity = new StepMap();
+
+    /**
+     * Inverts the step map. If the map transforms positions from document A to document B,
+     * the inverted map transforms positions from B to A.
+     * Assumes ranges are [fromA, toA, fromB, toB].
+     * Inverted will be [fromB, toB, fromA, toA].
+     */
+    invert(): StepMap {
+        const invertedRanges: number[] = [];
+        for (let i = 0; i < this.ranges.length; i += 4) {
+            invertedRanges.push(this.ranges[i+2], this.ranges[i+3], this.ranges[i], this.ranges[i+1]);
+        }
+        return new StepMap(invertedRanges);
+    }
 }
 
-console.log("transform/stepMap.ts defined: StepMap class.");
+console.log("transform/stepMap.ts updated with invert() method.");

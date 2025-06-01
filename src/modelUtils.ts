@@ -1,8 +1,17 @@
 // src/modelUtils.ts
 
-import { DocNode, BaseNode, TextNode, InlineNode, Mark } from './documentModel.js'; // Added Mark
+import { DocNode, BaseNode, TextNode, InlineNode, Mark } from './documentModel.js';
 import { ModelPosition } from './selection.js';
 import { Schema } from './schema.js';
+import { Slice } from './transform/slice.js';
+
+// Helper to get text of a text node, defaulting to empty string
+export function getText(node: BaseNode | null | undefined): string {
+    if (node && node.isText && !node.isLeaf) {
+        return (node as TextNode).text;
+    }
+    return "";
+}
 
 /**
  * Normalizes an array of inline nodes, merging adjacent TextNodes with the same marks
@@ -15,97 +24,57 @@ export function normalizeInlineArray(inlineNodes: ReadonlyArray<InlineNode>, sch
     if (!inlineNodes || inlineNodes.length === 0) {
         return [];
     }
-
     const result: InlineNode[] = [];
     let lastNode: InlineNode | null = null;
-
     for (const node of inlineNodes) {
         if (lastNode && lastNode.isText && !lastNode.isLeaf && node.isText && !node.isLeaf &&
-            marksEq(lastNode.marks || [], node.marks || [])) { // Use marksEq for comparing mark arrays
-            const mergedText = (lastNode as TextNode).text + (node as TextNode).text;
+            marksEq(lastNode.marks || [], node.marks || [])) {
+            const mergedText = getText(lastNode) + getText(node); // Use getText helper
             if (mergedText) {
                 const currentSchema = schema || node.type.schema;
                 if (!currentSchema) throw new Error("Schema must be available to normalize inline array and create text nodes.");
                 const newTextNode = currentSchema.text(mergedText, lastNode.marks) as TextNode;
                 result[result.length - 1] = newTextNode;
                 lastNode = newTextNode;
-            } else {
-                result.pop();
-                lastNode = result.length > 0 ? result[result.length -1] : null;
-            }
-        } else if (node.isText && !node.isLeaf && !(node as TextNode).text && node.marks && node.marks.length === 0) {
-            // Skip empty text node with no marks
-        } else {
-            result.push(node);
-            lastNode = node;
-        }
+            } else { result.pop(); lastNode = result.length > 0 ? result[result.length -1] : null; }
+        } else if (node.isText && !node.isLeaf && !getText(node) && node.marks && node.marks.length === 0) { // Use getText
+            // Skip
+        } else { result.push(node); lastNode = node; }
     }
     return result;
 }
 
 export function modelPositionToFlatOffset(doc: DocNode, position: ModelPosition, schema?: Schema): number {
-    let flatOffset = 0;
-    let currentParentNode: BaseNode = doc;
-    let currentChildrenInNode: ReadonlyArray<BaseNode> = doc.content || [];
-
+    let flatOffset = 0; let currentParentNode: BaseNode = doc; let currentChildrenInNode: ReadonlyArray<BaseNode> = doc.content || [];
     for (let i = 0; i < position.path.length; i++) {
-        const childIndexInList = position.path[i];
-        if (childIndexInList < 0 || childIndexInList >= currentChildrenInNode.length) {
-            throw new Error(`Invalid path in ModelPosition: index ${childIndexInList} out of bounds at depth ${i}. Path: ${position.path.join(',')}`);
-        }
-        for (let j = 0; j < childIndexInList; j++) flatOffset += currentChildrenInNode[j].nodeSize;
-        const targetChildNode = currentChildrenInNode[childIndexInList];
-        if (!targetChildNode.isText && !targetChildNode.isLeaf) flatOffset += 1;
-        if (targetChildNode.isLeaf && i < position.path.length - 1) throw new Error(`Invalid path: cannot descend into leaf node ${targetChildNode.type.name} at path segment ${i}`);
-        currentParentNode = targetChildNode;
-        currentChildrenInNode = targetChildNode.content || [];
+        const idx = position.path[i]; if (idx < 0 || idx >= currentChildrenInNode.length) throw new Error(`Invalid path: index ${idx} out of bounds at depth ${i}. Path: ${position.path.join(',')}`);
+        for (let j = 0; j < idx; j++) flatOffset += currentChildrenInNode[j].nodeSize;
+        const target = currentChildrenInNode[idx]; if (!target.isText && !target.isLeaf) flatOffset += 1;
+        if (target.isLeaf && i < position.path.length - 1) throw new Error(`Invalid path: cannot descend into leaf ${target.type.name}`);
+        currentParentNode = target; currentChildrenInNode = target.content || [];
     }
-
-    if (currentParentNode.isText && !currentParentNode.isLeaf) {
-        const textNode = currentParentNode as TextNode;
-        if (position.offset < 0 || position.offset > textNode.text.length) throw new Error(`Invalid offset ${position.offset} for TextNode with length ${textNode.text.length}`);
-        flatOffset += position.offset;
-    } else if (!currentParentNode.isLeaf) {
-        const contentOfParent = currentParentNode.content || [];
-        if (position.offset < 0 || position.offset > contentOfParent.length) throw new Error(`Invalid offset ${position.offset} for ElementNode with ${contentOfParent.length} children`);
-        for (let k = 0; k < position.offset; k++) flatOffset += contentOfParent[k].nodeSize;
-    } else {
-        if (position.offset !== 0 && !(position.offset === 1 && currentParentNode.nodeSize === 1) ) {
-            // console.warn(`Offset for a leaf node ${currentParentNode.type.name} is ${position.offset}.`);
-        }
-    }
+    if (currentParentNode.isText && !currentParentNode.isLeaf) { const tN = currentParentNode as TextNode; if (position.offset < 0 || position.offset > getText(tN).length) throw new Error(`Invalid offset ${position.offset} for TextNode len ${getText(tN).length}`); flatOffset += position.offset; } //Use getText
+    else if (!currentParentNode.isLeaf) { const content = currentParentNode.content || []; if (position.offset < 0 || position.offset > content.length) throw new Error(`Invalid offset ${position.offset} for Element with ${content.length} children`); for (let k = 0; k < position.offset; k++) flatOffset += content[k].nodeSize; }
+    else { if (position.offset !== 0 && !(position.offset === 1 && currentParentNode.nodeSize === 1)) { /* console.warn(`Offset for leaf ${currentParentNode.type.name} is ${position.offset}.`); */ } }
     return flatOffset;
 }
 
 export function flatOffsetToModelPosition(doc: DocNode, targetFlatOffset: number, schema?: Schema): ModelPosition {
-    if (targetFlatOffset < 0 || targetFlatOffset > doc.nodeSize) throw new Error(`flatOffset ${targetFlatOffset} is out of bounds for document of size ${doc.nodeSize}`);
-    const path: number[] = [];
-    let currentElement: BaseNode = doc;
-    let currentRemainingOffset = targetFlatOffset;
-
+    if (targetFlatOffset < 0 || targetFlatOffset > doc.nodeSize) throw new Error(`flatOffset ${targetFlatOffset} out of bounds for doc size ${doc.nodeSize}`);
+    const path: number[] = []; let currentElement: BaseNode = doc; let currentRemainingOffset = targetFlatOffset;
     while (true) {
-        if (currentElement.isText && !currentElement.isLeaf) {
-            if (currentRemainingOffset < 0 || currentRemainingOffset > currentElement.nodeSize) throw new Error(`Calculated offset ${currentRemainingOffset} is out of bounds for text node of size ${currentElement.nodeSize}`);
-            return { path, offset: currentRemainingOffset };
-        }
-        if (currentElement.isLeaf) {
-             if (currentRemainingOffset < 0 || currentRemainingOffset > currentElement.nodeSize ) throw new Error(`Calculated offset ${currentRemainingOffset} is out of bounds for leaf node ${currentElement.type.name} of size ${currentElement.nodeSize}`);
-            return { path, offset: currentRemainingOffset };
-        }
-
-        const children = currentElement.content || [];
-        let childIndex = 0;
-        let foundChildToDescend = false;
+        if (currentElement.isText && !currentElement.isLeaf) { if (currentRemainingOffset < 0 || currentRemainingOffset > currentElement.nodeSize) throw new Error(`Offset ${currentRemainingOffset} out of bounds for text node size ${currentElement.nodeSize}`); return { path, offset: currentRemainingOffset }; }
+        if (currentElement.isLeaf) { if (currentRemainingOffset < 0 || currentRemainingOffset > currentElement.nodeSize ) throw new Error(`Offset ${currentRemainingOffset} out of bounds for leaf ${currentElement.type.name} size ${currentElement.nodeSize}`); return { path, offset: currentRemainingOffset }; }
+        const children = currentElement.content || []; let childIndex = 0; let foundChildToDescend = false;
         for (childIndex = 0; childIndex < children.length; childIndex++) {
-            const child = children[childIndex];
-            const childNodeSize = child.nodeSize;
+            const child = children[childIndex]; const childNodeSize = child.nodeSize;
             if (child.isText || child.isLeaf) {
                 if (currentRemainingOffset < childNodeSize) { path.push(childIndex); return { path, offset: currentRemainingOffset }; }
                 else if (currentRemainingOffset === childNodeSize) { path.push(childIndex); return { path, offset: childNodeSize }; }
                 else { currentRemainingOffset -= childNodeSize; }
-            } else { // Container child
+            } else { // Container
                 if (currentRemainingOffset === 0) { return { path, offset: childIndex }; }
-                if (currentRemainingOffset < 1) { throw new Error(`Invalid flat offset: points within the opening tag of container ${child.type.name}. Offset: ${currentRemainingOffset}, Child: ${child.type.name}`); }
+                if (currentRemainingOffset < 1) { throw new Error(`Invalid flat offset: points in opening tag of container ${child.type.name}. Offset: ${currentRemainingOffset}`); }
                 if (currentRemainingOffset < childNodeSize) { path.push(childIndex); currentElement = child; currentRemainingOffset -= 1; foundChildToDescend = true; break; }
                 else { currentRemainingOffset -= childNodeSize; }
             }
@@ -116,205 +85,107 @@ export function flatOffsetToModelPosition(doc: DocNode, targetFlatOffset: number
 
 export function nodeAtPath(doc: BaseNode, path: number[]): BaseNode | null {
     let current: BaseNode | null = doc;
-    for (let i = 0; i < path.length; i++) {
-        const index = path[i];
-        if (!current || !current.content || index < 0 || index >= current.content.length) return null;
-        current = current.content[index];
-    }
+    for (let i = 0; i < path.length; i++) { const index = path[i]; if (!current?.content || index < 0 || index >= current.content.length) return null; current = current.content[index]; }
     return current;
 }
 
-export function replaceNodeAtPath(
-    currentParentNode: BaseNode,
-    path: number[], // Path to the direct parent of the node to be replaced
-    pathIndex: number, // Current index in `path` being processed
-    childIndexToReplace: number, // Index of the child in currentParentNode.content to replace
-    newNode: BaseNode, // The new node to insert
-    schema: Schema
-): BaseNode | null {
-    if (pathIndex > path.length) { // pathIndex should go up to path.length for the final parent
-        throw new Error("Path index out of bounds in replaceNodeAtPath.");
+export function replaceNodeAtPath( originalRoot: BaseNode, fullPathToNodeToReplace: number[], newNode: BaseNode, schema: Schema ): BaseNode | null {
+    if (fullPathToNodeToReplace.length === 0) {
+        if (originalRoot.type !== newNode.type) { console.error("Cannot replace root node with a node of a different type."); return null; }
+        return schema.node(newNode.type, newNode.attrs, newNode.content, newNode.marks);
     }
-
-    let newContent: BaseNode[];
-    const currentContent = currentParentNode.content || [];
-
-    if (pathIndex === path.length) { // We are at the direct parent of the node to replace
-        if (childIndexToReplace < 0 || childIndexToReplace >= currentContent.length) {
-            console.error("Child index out of bounds for replacement:", currentParentNode.type.name, childIndexToReplace, "Content length:", currentContent.length);
-            return null; // Invalid child index
-        }
-        newContent = [...currentContent];
-        newContent[childIndexToReplace] = newNode;
-    } else { // We need to go deeper
-        const currentChildIdxForRecursion = path[pathIndex];
-        if (currentChildIdxForRecursion < 0 || currentChildIdxForRecursion >= currentContent.length) {
-            console.error("Path index for recursion out of bounds:", currentParentNode.type.name, currentChildIdxForRecursion);
-            return null;
-        }
-        const childNodeToRecurseOn = currentContent[currentChildIdxForRecursion];
-        if (childNodeToRecurseOn.isLeaf || !childNodeToRecurseOn.content) {
-            console.error("Cannot replace node in path: child is a leaf or has no content, but path is longer.", childNodeToRecurseOn, path, pathIndex);
-            return null;
-        }
-        const updatedChild = replaceNodeAtPath(childNodeToRecurseOn, path, pathIndex + 1, childIndexToReplace, newNode, schema); // childIndexToReplace is passed down but only used at target depth
-        if (!updatedChild) return null;
-        newContent = [...currentContent];
-        newContent[currentChildIdxForRecursion] = updatedChild;
+    function recurse( currentParentNode: BaseNode, pathSegmentIndex: number ): BaseNode | null {
+        const childIndexToModify = fullPathToNodeToReplace[pathSegmentIndex];
+        const currentContent = currentParentNode.content || [];
+        if (childIndexToModify < 0 || childIndexToModify >= currentContent.length) { console.error(`Invalid path: index ${childIndexToModify} out of bounds at depth ${pathSegmentIndex}`); return null; }
+        const newContent = [...currentContent];
+        if (pathSegmentIndex === fullPathToNodeToReplace.length - 1) { newContent[childIndexToModify] = newNode; }
+        else { const childNodeToRecurseOn = currentContent[childIndexToModify]; if (childNodeToRecurseOn.isLeaf || !childNodeToRecurseOn.content) { console.error("Cannot recurse: child is leaf or has no content, but path is longer."); return null; } const updatedChild = recurse(childNodeToRecurseOn, pathSegmentIndex + 1); if (!updatedChild) return null; newContent[childIndexToModify] = updatedChild; }
+        return schema.node(currentParentNode.type, currentParentNode.attrs, newContent, currentParentNode.marks);
     }
-    return schema.node(currentParentNode.type, currentParentNode.attrs, newContent, currentParentNode.marks);
+    return recurse(originalRoot, 0);
 }
 
-// New helper for AddMarkStep/RemoveMarkStep
-export interface TextNodeRangeSegment {
-    node: TextNode;
-    path: number[];
-    startOffsetInNode: number; // Char offset in this text node where range starts
-    endOffsetInNode: number;   // Char offset in this text node where range ends
-}
+export interface TextNodeRangeSegment { node: TextNode; path: number[]; startOffsetInNode: number; endOffsetInNode: number; }
 
-export function findTextNodesInRange(
-    doc: DocNode,
-    fromFlat: number,
-    toFlat: number,
-    schema: Schema
-): TextNodeRangeSegment[] {
-    const results: TextNodeRangeSegment[] = [];
-    if (fromFlat >= toFlat) return results;
-
-    let currentFlatOffset = 0;
-
+export function findTextNodesInRange( doc: DocNode, fromFlat: number, toFlat: number, schema: Schema ): TextNodeRangeSegment[] {
+    const results: TextNodeRangeSegment[] = []; if (fromFlat >= toFlat) return results; let currentFlatOffset = 0;
     function traverse(currentNode: BaseNode, currentPath: number[]) {
-        if (currentFlatOffset >= toFlat) return; // Already past the range
-
+        if (currentFlatOffset >= toFlat) return;
         if (currentNode.isText && !currentNode.isLeaf) {
-            const textNode = currentNode as TextNode;
-            const nodeStartFlat = currentFlatOffset;
-            const nodeEndFlat = nodeStartFlat + textNode.nodeSize;
-
-            // Check for overlap
-            if (nodeStartFlat < toFlat && nodeEndFlat > fromFlat) {
-                const segmentStart = Math.max(0, fromFlat - nodeStartFlat);
-                const segmentEnd = Math.min(textNode.nodeSize, toFlat - nodeStartFlat);
-                if (segmentStart < segmentEnd) { // Ensure there's an actual segment
-                    results.push({
-                        node: textNode,
-                        path: [...currentPath],
-                        startOffsetInNode: segmentStart,
-                        endOffsetInNode: segmentEnd,
-                    });
-                }
-            }
+            const textNode = currentNode as TextNode; const nodeStartFlat = currentFlatOffset; const nodeEndFlat = nodeStartFlat + textNode.nodeSize;
+            if (nodeStartFlat < toFlat && nodeEndFlat > fromFlat) { const segStart = Math.max(0, fromFlat - nodeStartFlat); const segEnd = Math.min(textNode.nodeSize, toFlat - nodeStartFlat); if (segStart < segEnd) { results.push({ node: textNode, path: [...currentPath], startOffsetInNode: segStart, endOffsetInNode: segEnd });}}
             currentFlatOffset = nodeEndFlat;
-        } else if (currentNode.isLeaf) {
-            currentFlatOffset += currentNode.nodeSize;
-        } else { // Container node
-            if (currentNode !== doc) currentFlatOffset += 1; // Opening tag, unless it's the doc root
-
-            if (currentNode.content) {
-                for (let i = 0; i < currentNode.content.length; i++) {
-                    if (currentFlatOffset >= toFlat) break;
-                    traverse(currentNode.content[i], [...currentPath, i]);
-                }
-            }
-            if (currentNode !== doc) currentFlatOffset += 1; // Closing tag
-        }
+        } else if (currentNode.isLeaf) { currentFlatOffset += currentNode.nodeSize; }
+        else { if (currentNode !== doc) currentFlatOffset += 1; if (currentNode.content) { for (let i = 0; i < currentNode.content.length; i++) { if (currentFlatOffset >= toFlat) break; traverse(currentNode.content[i], [...currentPath, i]);}} if (currentNode !== doc) currentFlatOffset += 1; }
     }
-
-    traverse(doc, []);
-    return results;
+    traverse(doc, []); return results;
 }
 
-// New helper for AddMarkStep/RemoveMarkStep
-export function replaceNodeInPathWithMany(
-    doc: DocNode, // Operate on the whole doc for simplicity of returning new doc
-    pathToOriginalNode: number[],
-    newNodes: BaseNode[],
-    schema: Schema
-): DocNode | null {
-    if (pathToOriginalNode.length === 0) {
-        // Cannot replace the document root itself with multiple nodes directly this way.
-        // If newNodes.length === 1, it's a root replacement, otherwise it's invalid.
-        if (newNodes.length === 1 && newNodes[0].type === doc.type) {
-            return newNodes[0] as DocNode;
+export function replaceNodeInPathWithMany( doc: DocNode, pathToOriginalNode: number[], newNodes: BaseNode[], schema: Schema ): DocNode | null {
+    if (pathToOriginalNode.length === 0) { if (newNodes.length === 1 && newNodes[0].type === doc.type) return newNodes[0] as DocNode; console.error("Cannot replace doc root with multiple/wrong nodes."); return null; }
+    const parentPath = pathToOriginalNode.slice(0, -1); const childIdxToReplace = pathToOriginalNode[pathToOriginalNode.length - 1];
+    let directParent: BaseNode | null = doc;
+    if (parentPath.length > 0) directParent = nodeAtPath(doc, parentPath);
+    if (!directParent?.content || childIdxToReplace >= directParent.content.length) { console.error("Invalid parent path or child index for replaceNodeInPathWithMany"); return null; }
+    const newParentContent = [...directParent.content]; newParentContent.splice(childIdxToReplace, 1, ...newNodes);
+
+    function cloneWithModifiedContent(originalRoot: BaseNode, targetParentPath: number[], pathIdx: number, newContentForTargetParent: BaseNode[]): BaseNode {
+        const nodeToProcess = (pathIdx === 0) ? originalRoot : nodeAtPath(originalRoot, targetParentPath.slice(0, pathIdx))!; // originalRoot is doc for initial call
+
+        if (pathIdx === targetParentPath.length) { // We are at the direct parent whose content array needs to be newContentForTargetParent
+            return schema.node(nodeToProcess.type, nodeToProcess.attrs, newContentForTargetParent, nodeToProcess.marks);
         }
-        console.error("Cannot replace document root with multiple nodes or a non-doc node.");
-        return null;
-    }
-
-    const parentPath = pathToOriginalNode.slice(0, -1);
-    const childIndexToReplace = pathToOriginalNode[pathToOriginalNode.length - 1];
-
-    let currentParent: BaseNode = doc;
-    for(let i=0; i < parentPath.length; i++) {
-        const idx = parentPath[i];
-        if (!currentParent.content || idx >= currentParent.content.length) return null; // Invalid path
-        currentParent = currentParent.content[idx];
-    }
-
-    if (!currentParent.content || childIndexToReplace >= currentParent.content.length) return null;
-
-    const newParentContent = [...currentParent.content];
-    newParentContent.splice(childIndexToReplace, 1, ...newNodes); // Replace 1 old node with potentially many newNodes
-
-    const newParent = schema.node(currentParent.type, currentParent.attrs, normalizeInlineArray(newParentContent as InlineNode[], schema), currentParent.marks); // Assume normalize if inline
-
-    // Now, we need to reconstruct the document from the root down to this newParent
-    if (parentPath.length === 0) { // Parent was doc
-        return newParent as DocNode; // This assumes newParent is a DocNode, which is wrong if parentPath was empty.
-                                     // If parentPath is empty, newParentContent is list of blocks.
-                                     // The node being replaced was a direct child of doc.
-    }
-    // This needs to use the recursive replaceNodeAtPath logic.
-    // replaceNodeAtPath(doc, parentPath_to_parent, index_of_parent_in_grandparent, newParent, schema)
-    // This is getting complicated. replaceNodeAtPath needs to be able to replace a node with a *set* of nodes,
-    // or we build the new doc from scratch using the modified parent.
-
-    // Simplified: Assume replaceNodeAtPath can take the newParent, and parentPath is path to the node whose content changed.
-    // The current replaceNodeAtPath replaces *one node* with *one node*.
-    // We need to replace the *parent* of the original node with a new parent that has modified content.
-    // So, replaceNodeAtPath(doc, parentPath, 0 (pathIndex for parentPath), newParent, schema)
-    // The pathIndex for replaceNodeAtPath needs to be 0 if parentPath is relative to doc.
-
-    // Let's use a simpler recursive cloner for replaceNodeInPathWithMany's effect
-    function cloneWithModifiedContent(
-        originalNode: BaseNode,
-        targetPath: number[], // full path from doc to node whose content is being replaced
-        pathIdx: number,
-        newContentForTarget: BaseNode[]
-    ): BaseNode {
-        if (pathIdx === targetPath.length) { // We are at the node whose content gets replaced
-            return schema.node(originalNode.type, originalNode.attrs, newContentForTarget, originalNode.marks);
-        }
-        const currentChildIndex = targetPath[pathIdx];
-        const originalChildren = originalNode.content || [];
+        const currentChildIndexInPath = targetParentPath[pathIdx];
+        const originalChildren = nodeToProcess.content || [];
         const newChildren = [...originalChildren];
-        newChildren[currentChildIndex] = cloneWithModifiedContent(originalChildren[currentChildIndex], targetPath, pathIdx + 1, newContentForTarget);
-        return schema.node(originalNode.type, originalNode.attrs, newChildren, originalNode.marks);
+        newChildren[currentChildIndexInPath] = cloneWithModifiedContent(originalRoot, targetParentPath, pathIdx + 1, newContentForTargetParent);
+        return schema.node(nodeToProcess.type, nodeToProcess.attrs, newChildren, nodeToProcess.marks);
     }
-    if (parentPath.length === 0) { // Replacing content of the doc node itself
-         return schema.node(doc.type, doc.attrs, newParentContent) as DocNode;
-    }
+
+    if (parentPath.length === 0) return schema.node(doc.type, doc.attrs, newParentContent) as DocNode;
+    // The target for content modification is `directParent`. `parentPath` is path to `directParent`.
     return cloneWithModifiedContent(doc, parentPath, 0, newParentContent) as DocNode;
 }
 
-// Helper to compare arrays of marks (order independent, attribute sensitive)
+
 export function marksEq(marksA: ReadonlyArray<Mark>, marksB: ReadonlyArray<Mark>): boolean {
-    if (marksA === marksB) return true;
-    if (marksA.length !== marksB.length) return false;
-    return marksA.every(mA => marksB.some(mB => mA.eq(mB))) &&
-           marksB.every(mB => marksA.some(mA => mB.eq(mA)));
+    if (marksA === marksB) return true; if (marksA.length !== marksB.length) return false;
+    return marksA.every(mA => marksB.some(mB => mA.eq(mB))) && marksB.every(mB => marksA.some(mA => mB.eq(mA)));
 }
 
-// Helper for AddMarkStep/RemoveMarkStep
 export function normalizeMarks(marks: Mark[]): Mark[] {
-    // Sort by mark type name to ensure canonical order
     marks.sort((a, b) => a.type.name.localeCompare(b.type.name));
-    // Remove duplicate marks (same type and attrs) - Mark.eq handles this
-    return marks.filter((mark, index, self) =>
-        index === self.findIndex((m) => m.eq(mark))
-    );
+    return marks.filter((mark, index, self) => index === self.findIndex((m) => m.eq(mark)));
 }
 
+export function sliceDocByFlatOffsets(doc: DocNode, fromFlat: number, toFlat: number, schema: Schema): Slice {
+    if (fromFlat >= toFlat) return Slice.empty;
+    const fromPos = flatOffsetToModelPosition(doc, fromFlat, schema); const toPos = flatOffsetToModelPosition(doc, toFlat, schema);
+    if (!fromPos || !toPos) { console.warn("sliceDocByFlatOffsets: Invalid fromPos or toPos from flat offsets."); return Slice.empty; }
+    const fromParentPath = fromPos.path.slice(0, -1); const toParentPath = toPos.path.slice(0, -1);
 
-console.log("modelUtils.ts updated with findTextNodesInRange, replaceNodeInPathWithMany, normalizeMarks, marksEq.");
+    if (fromPos.path.length > 0 && toPos.path.length > 0 && fromParentPath.join(',') === toParentPath.join(',')) {
+        const parentBlockPath = fromParentPath; const parentBlock = nodeAtPath(doc, parentBlockPath);
+        if (!parentBlock?.content || parentBlock.isLeaf || !parentBlock.type.spec.content?.includes("inline")) return Slice.empty;
+        const inlineContent = parentBlock.content as ReadonlyArray<BaseNode>;
+        const fromIdx = fromPos.path[fromPos.path.length - 1]; const fromOff = fromPos.offset;
+        const toIdx = toPos.path[toPos.path.length - 1]; const toOff = toPos.offset;
+        const sliced: BaseNode[] = [];
+        if (fromIdx === toIdx) { const node = inlineContent[fromIdx]; if (node?.isText && !node.isLeaf) { const textVal = getText(node).slice(fromOff, toOff); if (textVal) sliced.push(schema.text(textVal, node.marks)); } else if (node && fromOff === 0 && (toOff === 1 && node.isLeaf || toOff === (node.content?.length||0))) { sliced.push(node); }}
+        else { const node1 = inlineContent[fromIdx]; if (node1?.isText && !node1.isLeaf) { if (fromOff < getText(node1).length) sliced.push(schema.text(getText(node1).slice(fromOff), node1.marks)); } else if (node1 && fromOff === 0) { sliced.push(node1); }
+               for (let i = fromIdx + 1; i < toIdx; i++) sliced.push(inlineContent[i]);
+               const nodeN = inlineContent[toIdx]; if (nodeN?.isText && !nodeN.isLeaf) { if (toOff > 0) sliced.push(schema.text(getText(nodeN).slice(0, toOff), nodeN.marks)); } else if (nodeN && toOff > 0) { sliced.push(nodeN); }}
+        return Slice.fromFragment(normalizeInlineArray(sliced as InlineNode[], schema));
+    }
+    let startBlockIdx = -1, endBlockIdx = -1;
+    if (fromPos.path.length === 0) startBlockIdx = fromPos.offset; else if (fromPos.path.length === 1 && fromPos.offset === 0) startBlockIdx = fromPos.path[0]; else startBlockIdx = fromPos.path[0];
+    if (toPos.path.length === 0) endBlockIdx = toPos.offset -1;
+    else if (toPos.path.length === 1) { const block = nodeAtPath(doc, [toPos.path[0]]); if (block && ( (block.isText && toPos.offset === getText(block).length) || (!block.isText && !block.isLeaf && toPos.offset === (block.content?.length || 0)) || (block.isLeaf && toPos.offset === 1) ) ) endBlockIdx = toPos.path[0]; else endBlockIdx = toPos.path[0] -1; }
+    else { endBlockIdx = toPos.path[0]; }
+    const slicedBlocks: BaseNode[] = [];
+    if (startBlockIdx !== -1 && endBlockIdx !== -1 && startBlockIdx <= endBlockIdx && doc.content) { for (let i = startBlockIdx; i <= endBlockIdx; i++) { if (doc.content[i]) slicedBlocks.push(doc.content[i]); } return new Slice(slicedBlocks, 0, 0); }
+    console.warn(`sliceDocByFlatOffsets: Unhandled complex case or invalid range. From: ${fromFlat}, To: ${toFlat}`); return Slice.empty;
+}
+
+console.log("modelUtils.ts updated: getText moved here, replaceNodeAtPath signature changed, sliceDocByFlatOffsets refined.");

@@ -5,9 +5,6 @@ import { StepMap } from './stepMap.js';
 /**
  * A mapping represents a series of steps that have been applied to a document.
  * It can map positions in the original document to the final document, and vice-versa.
- * This is a simplified version for the PoC, primarily handling forward mapping
- * through a sequence of StepMaps. A full implementation would also handle inverting
- * maps and composing them more robustly.
  */
 export class Mapping {
     /**
@@ -35,8 +32,28 @@ export class Mapping {
      * @param map The StepMap to append.
      */
     appendMap(map: StepMap): Mapping {
-        // Create a new array with all existing maps plus the new one
         return new Mapping([...this.maps, map]);
+    }
+
+    /**
+     * Appends another Mapping to this mapping, returning a new Mapping.
+     * @param other The other Mapping to append.
+     */
+    appendMapping(other: Mapping): Mapping {
+        return new Mapping([...this.maps, ...other.maps]);
+    }
+
+    /**
+     * Gets an inverted version of this mapping.
+     * This is a PoC implementation that inverts each StepMap in reverse order.
+     * @returns A new Mapping with inverted StepMaps.
+     */
+    get inverted(): Mapping {
+        const invertedMaps: StepMap[] = [];
+        for (let i = this.maps.length - 1; i >= 0; i--) {
+            invertedMaps.push(this.maps[i].invert());
+        }
+        return new Mapping(invertedMaps);
     }
 
     /**
@@ -45,4 +62,4 @@ export class Mapping {
     static readonly identity = new Mapping();
 }
 
-console.log("transform/mapping.ts defined: Mapping class.");
+console.log("transform/mapping.ts updated with appendMapping and inverted getter (PoC).");

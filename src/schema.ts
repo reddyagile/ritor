@@ -7,7 +7,6 @@ import {
   TextNode as ModelTextNode,
   AnyMark as ModelAnyMark,
   // We'll need a generic way to create these or specific factories if they remain distinct types.
-  ModelAnyMark, // Ensure ModelAnyMark is imported if not already covered by BaseNode etc.
   // attrsEq, // Attempt to import if it's exported from documentModel.js
 } from './documentModel.js'; // Assuming .js for ESM runtime
 import { attrsEq } from './documentModel.js'; // Explicit import for attrsEq
