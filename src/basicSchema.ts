@@ -105,27 +105,67 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
             };
         },
     }],
+  },
+  blockquote: {
+    content: "block+", // Allows one or more block elements (e.g. paragraphs)
+    group: "block",
+    defining: true,
+    attrs: { id: {} },
+    toDOM: (node: BaseNode): DOMOutputSpec => ["blockquote", { id: node.attrs!.id }, 0],
+    parseDOM: [{ tag: "blockquote" }],
   }
 };
 
 export const basicMarkSpecs: { [name: string]: MarkSpec } = {
   bold: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["strong", 0],
+    parseDOM: [
+        {tag: "strong"},
+        {tag: "b"},
+        {style: "font-weight=bold"},
+        {style: "font-weight=700"}, // Common bold weight
+        {style: "font-weight=600"}  // Sometimes used for bold
+    ]
   },
   italic: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["em", 0],
+    parseDOM: [{tag: "i"}, {tag: "em"}, {style: "font-style=italic"}]
   },
-  // Example for later:
-  // link: {
-  //   attrs: { href: {}, title: { default: null } },
-  //   inclusive: false,
-  //   toDOM: (mark: ModelMark, _inline: boolean): DOMOutputSpec => {
-  //     const { href, title } = mark.attrs as { href: string, title?: string };
-  //     const attrs: Attrs = { href };
-  //     if (title) attrs.title = title;
-  //     return ["a", attrs, 0];
-  //   }
-  // }
+  strikethrough: {
+    parseDOM: [
+        { tag: "s" },
+        { tag: "del" },
+        { tag: "strike" },
+        { style: "text-decoration=line-through" }, // CSS 2.1
+        { style: "text-decoration-line=line-through" } // CSS 3
+    ],
+    toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["s", 0]
+  },
+  link: {
+    attrs: {
+        href: { default: "" },
+        title: { default: null }
+    },
+    inclusive: false,
+    toDOM: (mark: ModelMark, _inline: boolean): DOMOutputSpec => {
+        const markAttrs = mark.attrs as { href: string, title?: string }; // Type assertion
+        const domAttrs: Attrs = { href: markAttrs.href };
+        if (markAttrs.title) {
+            domAttrs.title = markAttrs.title;
+        }
+        return ["a", domAttrs, 0];
+    },
+    parseDOM: [{
+        tag: "a[href]",
+        getAttrs: (dom: unknown) => {
+            const htmlElement = dom as HTMLElement; // Type assertion
+            return {
+                href: htmlElement.getAttribute("href"),
+                title: htmlElement.getAttribute("title")
+            };
+        }
+    }]
+  }
 };
 
-console.log("basicSchema.ts defined with specs for doc, paragraph, text, hard_break, bold, italic.");
+console.log("basicSchema.ts defined with specs for doc, paragraph, text, hard_break, bold, italic, strikethrough, and link.");

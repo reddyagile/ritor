@@ -10,6 +10,7 @@ import { NodeType, MarkType } from './schema.js';
 import { ModelUtils } from './modelUtils.js';
 import { ModelSelection, ModelPosition } from './selection.js';
 import { UndoManager } from './undoManager.js';
+import { Attrs } from './schemaSpec.js';
 
 // Definition for SimpleChange for PoC selection mapping
 type SimpleChange =
@@ -18,7 +19,9 @@ type SimpleChange =
   | { type: 'splitNode'; path: number[]; offset: number;
       newParaPathIndex: number;
     }
-  | { type: 'transformBlock'; path: number[]; newType: NodeType; newAttrs?: any }; // Path to the block
+  | { type: 'transformBlock'; path: number[]; newType: NodeType; newAttrs?: any }
+  | { type: 'insertNode'; path: number[]; node: BaseNode }
+  | { type: 'formatMark'; from: ModelPosition, to: ModelPosition, markType: string, attrs?: Attrs };
 
 export class RitorVDOM {
   public $el: HTMLElement;
@@ -35,9 +38,7 @@ export class RitorVDOM {
   constructor(target: string | HTMLElement, schema?: Schema) {
     if (typeof target === 'string') {
       const element = document.querySelector(target) as HTMLElement;
-      if (!element) {
-        throw new Error(`Target element "${target}" not found.`);
-      }
+      if (!element) throw new Error(`Target element "${target}" not found.`);
       this.$el = element;
     } else {
       this.$el = target;
@@ -63,20 +64,23 @@ export class RitorVDOM {
     this.$el.addEventListener('keydown', (event: KeyboardEvent) => {
       let handled = false;
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'z') {
-        if (event.shiftKey) {
-          this.redo();
-        } else {
-          this.undo();
-        }
+        if (event.shiftKey) { this.redo(); } else { this.undo(); }
         handled = true;
       } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'y') {
         this.redo();
         handled = true;
+      } else if (event.altKey && event.key.toLowerCase() === 's') {
+        if (this.schema.marks.strikethrough) {
+            this.toggleMark(this.schema.marks.strikethrough);
+            handled = true;
+        }
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        this.promptAndSetLink();
+        handled = true;
       }
 
-      if (handled) {
-        event.preventDefault();
-      }
+      if (handled) event.preventDefault();
     });
 
     this.observer = new MutationObserver(this.handleMutations.bind(this));
@@ -90,10 +94,57 @@ export class RitorVDOM {
     this.$el.addEventListener('keyup', this.updateModelSelectionState.bind(this));
   }
 
+  private getBlockContext(modelPos: ModelPosition | null): {
+    blockNode: BaseNode | null,
+    blockIndex: number,
+    parentOfBlock: BaseNode | null,
+    pathFromParentToBlock: number[]
+  } | null {
+    if (!modelPos || !this.currentViewDoc.content) return null;
+    const path = modelPos.path;
+    if (path.length === 0) return null;
+    let currentParent: BaseNode = this.currentViewDoc;
+    let finalBlockNode: BaseNode | null = null;
+    let finalBlockIndex = -1;
+    let finalParentOfBlock: BaseNode | null = this.currentViewDoc;
+    let finalPathInParent : number[] = [];
+    for(let i=0; i < path.length; i++) {
+        const index = path[i];
+        const parentContent = currentParent.content;
+        if (!parentContent || index >= parentContent.length) return null;
+        const nodeAtPath = parentContent[index];
+        const nodeAtPathType = nodeAtPath.type as NodeType;
+        if (nodeAtPathType.isBlock) {
+            finalParentOfBlock = currentParent;
+            finalBlockNode = nodeAtPath;
+            finalBlockIndex = index;
+            finalPathInParent = [index];
+            if (i < path.length -1) { currentParent = nodeAtPath; }
+        } else if (nodeAtPathType.isText || nodeAtPathType.spec.inline) {
+            finalBlockNode = currentParent;
+            if(currentParent !== this.currentViewDoc) {
+                let grandParent = this.currentViewDoc;
+                let searchPath = path.slice(0, i);
+                finalPathInParent = [searchPath[searchPath.length-1]];
+                for(let k=0; k < searchPath.length -1; k++) {
+                    grandParent = grandParent.content![searchPath[k]];
+                }
+                finalParentOfBlock = grandParent;
+                finalBlockIndex = searchPath[searchPath.length-1];
+            } else {
+                finalBlockIndex = path[0];
+                finalPathInParent = [path[0]];
+            }
+            break;
+        }
+    }
+    if (!finalBlockNode) return null;
+    return { blockNode: finalBlockNode, blockIndex: finalPathInParent[0], parentOfBlock: finalParentOfBlock, pathInParent: finalPathInParent };
+  }
+
   private domToModelPosition(domNode: globalThis.Node, domOffset: number): ModelPosition | null {
     let containingElement: HTMLElement | null = null;
     let charOffsetInElement = 0;
-
     if (domNode.nodeType === Node.TEXT_NODE) {
       containingElement = domNode.parentNode as HTMLElement;
       charOffsetInElement = domOffset;
@@ -106,70 +157,60 @@ export class RitorVDOM {
       containingElement = domNode as HTMLElement;
       charOffsetInElement = domOffset;
     }
-
     if (!containingElement) return null;
-
-    let domBlockElement: HTMLElement | null = containingElement;
-    const blockTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'DIV', 'UL', 'OL', 'LI']; // Include list tags
-    while (domBlockElement && domBlockElement !== this.$el && !blockTags.includes(domBlockElement.nodeName) ) {
-        if(domBlockElement.parentNode === this.$el) break;
-        domBlockElement = domBlockElement.parentNode as HTMLElement;
+    let currentPath: number[] = [];
+    let domSearchElement: HTMLElement | null = containingElement;
+    const pathSegments: {element: HTMLElement, index: number}[] = [];
+    while(domSearchElement && domSearchElement !== this.$el) {
+        const parentChildren = Array.from(domSearchElement.parentNode?.children || []);
+        pathSegments.unshift({element: domSearchElement, index: parentChildren.indexOf(domSearchElement)});
+        domSearchElement = domSearchElement.parentNode as HTMLElement | null;
     }
-     if (domBlockElement === this.$el && containingElement !== this.$el) {
-        domBlockElement = containingElement;
-        while(domBlockElement && domBlockElement.parentNode !== this.$el) {
-            domBlockElement = domBlockElement.parentNode as HTMLElement;
+    if (pathSegments.length === 0 && containingElement !== this.$el) return null;
+    let modelBlock: BaseNode | null = null;
+    if (pathSegments.length > 0) {
+        currentPath.push(pathSegments[0].index);
+        modelBlock = this.currentViewDoc.content?.[pathSegments[0].index] ?? null;
+        for(let i = 1; i < pathSegments.length; i++) {
+            if (!modelBlock || !(modelBlock.type as NodeType).isBlock || !modelBlock.content) break;
+            currentPath.push(pathSegments[i].index);
+            modelBlock = modelBlock.content[pathSegments[i].index] ?? null;
         }
+    } else if (containingElement === this.$el) {
+        if (domOffset < this.$el.children.length) {
+            currentPath.push(domOffset);
+            modelBlock = this.currentViewDoc.content?.[domOffset] ?? null;
+            charOffsetInElement = 0;
+        } else return null;
     }
-
-    if (!domBlockElement || (domBlockElement === this.$el && !(containingElement === this.$el && this.$el.children[domOffset]))) {
-         if (containingElement === this.$el && this.$el.children.length > 0 && domOffset < this.$el.children.length) {
-            const targetBlock = this.$el.children[domOffset] as HTMLElement;
-            if (targetBlock && blockTags.includes(targetBlock.nodeName)) {
-                domBlockElement = targetBlock;
-                charOffsetInElement = 0;
-            } else { return null; }
-        } else { return null; }
-    }
-
-    const modelBlockIndex = Array.from(this.$el.children).indexOf(domBlockElement);
-    if (modelBlockIndex === -1) return null;
-
-    const modelBlock = this.currentViewDoc.content?.[modelBlockIndex];
-    if (!modelBlock || !modelBlock.content) return { path: [modelBlockIndex], offset: 0 };
-
-    let currentLength = 0;
-    for (let i = 0; i < modelBlock.content.length; i++) {
-        const inlineNode = modelBlock.content[i];
-        const nodeType = inlineNode.type as NodeType;
-        if (nodeType.isText) {
-            const textLen = (inlineNode as ModelTextNode).text.length;
-            if (charOffsetInElement <= currentLength + textLen) {
-                return { path: [modelBlockIndex, i], offset: charOffsetInElement - currentLength };
+    if (!modelBlock) return null;
+    if (!(modelBlock.type as NodeType).isText && !modelBlock.spec.inline && modelBlock.content) {
+        let currentLength = 0;
+        for (let i = 0; i < modelBlock.content.length; i++) {
+            const inlineNode = modelBlock.content[i];
+            const nodeType = inlineNode.type as NodeType;
+            if (nodeType.isText) {
+                const textLen = (inlineNode as ModelTextNode).text.length;
+                if (charOffsetInElement <= currentLength + textLen) {
+                    return { path: [...currentPath, i], offset: charOffsetInElement - currentLength };
+                }
+                currentLength += textLen;
+            } else {
+                if (charOffsetInElement <= currentLength + 1) {
+                    return { path: [...currentPath, i], offset: charOffsetInElement - currentLength };
+                }
+                currentLength += 1;
             }
-            currentLength += textLen;
-        } else {
-            if (charOffsetInElement <= currentLength + 1) {
-                return { path: [modelBlockIndex, i], offset: charOffsetInElement - currentLength };
-            }
-            currentLength += 1;
         }
+        const lastInlineIdx = modelBlock.content.length > 0 ? modelBlock.content.length - 1 : 0;
+        const lastInline = modelBlock.content[lastInlineIdx] as ModelTextNode | undefined;
+        let offsetInLast = 0;
+        if(lastInline) offsetInLast = (lastInline.type as NodeType).isText ? lastInline.text.length : 1;
+        if(modelBlock.content.length === 0) return {path: currentPath, offset:0};
+        return { path: [...currentPath, lastInlineIdx], offset: offsetInLast };
+    } else {
+        return { path: currentPath, offset: charOffsetInElement };
     }
-    const lastInlineNodeIndex = modelBlock.content.length > 0 ? modelBlock.content.length - 1 : 0;
-    const lastInlineNode = modelBlock.content[lastInlineNodeIndex] as ModelTextNode | undefined;
-    let offsetInLastNode = 0;
-    if (lastInlineNode) {
-        if ((lastInlineNode.type as NodeType).isText) {
-            offsetInLastNode = lastInlineNode.text.length;
-        } else { offsetInLastNode = 1; }
-    }
-    if (charOffsetInElement > currentLength) {
-        return { path: [modelBlockIndex, lastInlineNodeIndex], offset: offsetInLastNode };
-    }
-    if (modelBlock.content.length === 0) {
-        return { path: [modelBlockIndex], offset: 0 };
-    }
-    return { path: [modelBlockIndex, lastInlineNodeIndex], offset: offsetInLastNode };
   }
 
   private mapDomSelectionToModel(): ModelSelection | null {
@@ -188,37 +229,47 @@ export class RitorVDOM {
 
   private modelToDomPosition(modelPos: ModelPosition): { node: globalThis.Node; offset: number } | null {
     if (!this.currentViewDoc.content || modelPos.path.length === 0) return null;
-    const blockIndex = modelPos.path[0];
-    const domBlock = this.$el.children[blockIndex] as HTMLElement;
-    if (!domBlock) return null;
-
-    if (modelPos.path.length === 1) {
-      if (!domBlock.firstChild && modelPos.offset === 0) return { node: domBlock, offset: 0 };
-      if (modelPos.offset < domBlock.childNodes.length) return { node: domBlock, offset: modelPos.offset };
-      else if (domBlock.childNodes.length === 0 && modelPos.offset === 0) return { node: domBlock, offset: 0 };
-      const lastChild = domBlock.lastChild;
-      return { node: lastChild || domBlock, offset: lastChild ? (lastChild.textContent || "").length : 0};
-    }
-
-    const inlineNodeIndex = modelPos.path[1];
-    if (!domBlock.childNodes || inlineNodeIndex >= domBlock.childNodes.length) {
-        if (inlineNodeIndex === domBlock.childNodes.length && modelPos.offset === 0) {
-            if (domBlock.lastChild) return { node: domBlock.lastChild, offset: (domBlock.lastChild.nodeType === Node.TEXT_NODE ? (domBlock.lastChild.textContent || "").length : 1) };
-            else return { node: domBlock, offset: 0 };
+    let currentDomParent: HTMLElement = this.$el;
+    let modelNodeContainer: ReadonlyArray<BaseNode> | undefined = this.currentViewDoc.content;
+    let targetModelNode: BaseNode | null = null;
+    for(let i=0; i < modelPos.path.length; i++) {
+        const index = modelPos.path[i];
+        if(!modelNodeContainer || index >= modelNodeContainer.length) return null;
+        targetModelNode = modelNodeContainer[index];
+        if (i < modelPos.path.length - 1) {
+            currentDomParent = currentDomParent.children[index] as HTMLElement;
+            if(!currentDomParent) return null;
+            modelNodeContainer = targetModelNode.content;
         }
-        return { node: domBlock, offset: 0 };
     }
-    const targetDomInlineNode = domBlock.childNodes[inlineNodeIndex];
-    if (!targetDomInlineNode) return { node: domBlock, offset: 0 };
-    if (targetDomInlineNode.nodeType === Node.TEXT_NODE) return { node: targetDomInlineNode, offset: Math.min(modelPos.offset, (targetDomInlineNode.textContent || "").length) };
-    else return { node: domBlock, offset: inlineNodeIndex + modelPos.offset };
+    if (!targetModelNode) return null;
+    if ((targetModelNode.type as NodeType).isText) {
+        const inlineNodeIndex = modelPos.path[modelPos.path.length -1];
+        const domTextNode = currentDomParent.childNodes[inlineNodeIndex];
+        if (domTextNode && domTextNode.nodeType === Node.TEXT_NODE) {
+            return { node: domTextNode, offset: Math.min(modelPos.offset, (domTextNode.textContent || "").length) };
+        } else if (domTextNode) {
+             return { node: currentDomParent, offset: inlineNodeIndex + modelPos.offset};
+        }
+        return { node: currentDomParent, offset: currentDomParent.childNodes.length };
+    } else {
+        const blockElement = currentDomParent.children[modelPos.path[modelPos.path.length-1]] as HTMLElement;
+        if (!blockElement) return {node: currentDomParent, offset: currentDomParent.children.length};
+        if (!targetModelNode.content || targetModelNode.content.length === 0) {
+            return { node: blockElement, offset: 0 };
+        }
+        if (modelPos.offset < blockElement.childNodes.length) {
+             return { node: blockElement, offset: modelPos.offset };
+        }
+        return { node: blockElement, offset: blockElement.childNodes.length };
+    }
   }
 
   private applyModelSelectionToDom(modelSelection: ModelSelection | null): void {
     if (!modelSelection) return;
     const domAnchor = this.modelToDomPosition(modelSelection.anchor);
     const domHead = this.modelToDomPosition(modelSelection.head);
-    if (!domAnchor || !domHead) return;
+    if (!domAnchor || !domHead) { console.error("applyModelSelectionToDom: Could not map model selection points."); return;}
     const domSel = window.getSelection();
     if (!domSel) return;
     try {
@@ -232,13 +283,10 @@ export class RitorVDOM {
     }
   }
 
-  // TODO: COMMENTING - Add detailed comments to this method explaining its sections and PoC limitations.
   private handleBeforeInput(event: InputEvent): void {
     this.updateModelSelectionState();
     if (this.isReconciling) return;
-
     if (!this.currentModelSelection) {
-        console.warn("RitorVDOM: Could not map DOM selection for beforeinput.");
         if (['insertText', 'insertParagraph', 'deleteContentBackward', 'deleteContentForward'].includes(event.inputType)) {
             event.preventDefault(); return;
         }
@@ -246,198 +294,176 @@ export class RitorVDOM {
     const currentModelPos = this.currentModelSelection?.anchor;
     if (!currentModelPos) {
         if (['insertText', 'insertParagraph', 'deleteContentBackward', 'deleteContentForward'].includes(event.inputType)) {
-            console.warn(`RitorVDOM: No valid model position for ${event.inputType}.`);
             event.preventDefault(); return;
         }
     }
-
     let newDoc: BaseNode | null = null;
     this.lastAppliedChange = null;
-
     if (event.inputType === 'insertText' && event.data && currentModelPos) {
       const modelBlockIndex = currentModelPos.path[0];
       const modelInlineNodeIndex = currentModelPos.path.length > 1 ? currentModelPos.path[1] : -1;
       const textOffset = currentModelPos.offset;
       const currentBlockNode = this.currentViewDoc.content?.[modelBlockIndex];
-
-      if (!currentBlockNode) { console.warn("InsertText: Block not found for currentModelPos"); return; }
-
-      // Heading and List Markdown-like shortcuts
+      if (!currentBlockNode) { return; }
       if (event.data === ' ' && (currentBlockNode.type as NodeType).name === 'paragraph') {
         const inlineContent = currentBlockNode.content || [];
-        // Shortcut must be at the beginning of a text node which is the first inline node.
         if (modelInlineNodeIndex === 0 && textOffset === 0 && inlineContent.length > 0 && (inlineContent[0].type as NodeType).name === 'text') {
           const currentTextNode = inlineContent[0] as ModelTextNode;
           const textBeforeSpace = currentTextNode.text;
-
           let level: number | undefined;
           let listTypeNode: NodeType | undefined;
           let transformToType: NodeType | undefined;
           let newAttrs: any = { ...(currentBlockNode.attrs || {}), id: currentBlockNode.attrs?.id || this.schema.generateNodeId() };
-          let newChangeType: 'transformBlock' | null = null;
-
           if (textBeforeSpace === '#') { level = 1; transformToType = this.schema.nodes.heading; }
           else if (textBeforeSpace === '##') { level = 2; transformToType = this.schema.nodes.heading; }
           else if (textBeforeSpace === '###') { level = 3; transformToType = this.schema.nodes.heading; }
           else if (textBeforeSpace === '*' || textBeforeSpace === '-') { listTypeNode = this.schema.nodes.bullet_list; transformToType = listTypeNode; }
           else if (textBeforeSpace === '1.') { listTypeNode = this.schema.nodes.ordered_list; newAttrs.order = 1; transformToType = listTypeNode; }
-
+          else if (textBeforeSpace === '>') { transformToType = this.schema.nodes.blockquote; }
           if (transformToType) {
             event.preventDefault();
             let finalTransformedNode: BaseNode;
-            if (level && transformToType.name === 'heading') {
+            if (transformToType.name === 'heading' && level) {
                 newAttrs.level = level;
                 finalTransformedNode = this.schema.node(transformToType, newAttrs, [this.schema.text("")]);
-                this.lastAppliedChange = { type: 'transformBlock', path: [modelBlockIndex], newType: transformToType, newAttrs };
             } else if (listTypeNode) {
                 const listItemPara = this.schema.node(this.schema.nodes.paragraph, {}, [this.schema.text("")]);
                 const listItem = this.schema.node(this.schema.nodes.list_item, {}, [listItemPara]);
                 finalTransformedNode = this.schema.node(listTypeNode, newAttrs, [listItem]);
-                 this.lastAppliedChange = { type: 'transformBlock', path: [modelBlockIndex], newType: listTypeNode, newAttrs };
-            } else { return; /* Should not happen if transformToType is set */ }
-
+            } else if (transformToType.name === 'blockquote') {
+                const emptyParaInBlockquote = this.schema.node(this.schema.nodes.paragraph, {}, [this.schema.text("")]);
+                finalTransformedNode = this.schema.node(transformToType, newAttrs, [emptyParaInBlockquote]);
+            } else { return; }
+            this.lastAppliedChange = { type: 'transformBlock', path: [modelBlockIndex], newType: transformToType, newAttrs };
             const newDocContent = [...(this.currentViewDoc.content || [])];
             newDocContent[modelBlockIndex] = finalTransformedNode;
             newDoc = this.schema.node((this.currentViewDoc.type as NodeType), this.currentViewDoc.attrs, newDocContent);
           }
         }
       }
-
       if (!newDoc && event.data) {
         event.preventDefault();
-        const paragraphContent = currentBlockNode.content || []; // currentBlockNode is defined if currentModelPos is
+        const blockContent = currentBlockNode.content || [];
         let newInlineContent: BaseNode[];
-        const targetModelTextNode = paragraphContent?.[modelInlineNodeIndex] as ModelTextNode | undefined;
-
+        const targetModelTextNode = blockContent?.[modelInlineNodeIndex] as ModelTextNode | undefined;
         if (targetModelTextNode && targetModelTextNode.type.name === 'text') {
           const newText = targetModelTextNode.text.slice(0, textOffset) + event.data + targetModelTextNode.text.slice(textOffset);
-          newInlineContent = [...paragraphContent];
+          newInlineContent = [...blockContent];
           newInlineContent[modelInlineNodeIndex] = this.schema.text(newText, targetModelTextNode.marks);
           this.lastAppliedChange = { type: 'insertText', path: [modelBlockIndex, modelInlineNodeIndex], offset: textOffset, length: event.data.length};
-        } else if ( (paragraphContent.length === 0 || modelInlineNodeIndex === -1 || modelInlineNodeIndex === paragraphContent.length) && textOffset === 0 ) {
+        } else if ( (blockContent.length === 0 || modelInlineNodeIndex === -1 || modelInlineNodeIndex === blockContent.length) && textOffset === 0 ) {
           const newTextNode = this.schema.text(event.data || "");
-          const targetInlineIdx = (modelInlineNodeIndex === -1 || paragraphContent.length === 0) ? 0 : modelInlineNodeIndex;
-          if(modelInlineNodeIndex === -1 || paragraphContent.length === 0) {
+          const targetInlineIdx = (modelInlineNodeIndex === -1 || blockContent.length === 0) ? 0 : modelInlineNodeIndex;
+          if(modelInlineNodeIndex === -1 || blockContent.length === 0) {
               newInlineContent = [newTextNode];
           } else {
-              newInlineContent = [...paragraphContent];
+              newInlineContent = [...blockContent];
               newInlineContent.splice(targetInlineIdx, 0, newTextNode);
           }
           this.lastAppliedChange = { type: 'insertText', path: [modelBlockIndex, targetInlineIdx], offset: 0, length: event.data.length};
-        } else { console.warn("InsertText: Unhandled case for text insertion after shortcut check."); return; }
-
+        } else { console.warn("InsertText: Unhandled after shortcut."); return; }
         const normalizedInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
         const updatedBlock = this.schema.node(currentBlockNode.type as NodeType, currentBlockNode.attrs, normalizedInlineContent);
         const newDocContent = [...(this.currentViewDoc.content || [])];
         newDocContent[modelBlockIndex] = updatedBlock;
         newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
-      } else if (!newDoc && !event.data && event.inputType === 'insertText'){
-          console.log("RitorVDOM: Empty insertText event, letting mutation observer handle.");
-          return;
-      }
-
+      } else if (!newDoc && !event.data && event.inputType === 'insertText'){ return; }
     } else if (event.inputType === 'insertParagraph' && currentModelPos) {
       event.preventDefault();
       const modelBlockIndex = currentModelPos.path[0];
       const modelInlineNodeIndex = currentModelPos.path.length > 1 ? currentModelPos.path[1] : -1;
       const textOffset = currentModelPos.offset;
-
       const currentBlock = this.currentViewDoc.content?.[modelBlockIndex];
-      if (!currentBlock ) { console.warn("InsertParagraph: Current block not found"); return; }
-
-      // Handle Enter in list item
-      if ((currentBlock.type as NodeType).name === 'paragraph' && currentModelPos.path.length > 1) {
-          // Check if this paragraph is inside a list_item
-          const parentListPath = currentModelPos.path.slice(0, -2); // Path to potential list node
-          const listItemIndex = currentModelPos.path[currentModelPos.path.length -2]; // Potential list_item index in list
-
-          let parentNode = this.currentViewDoc;
-          for(let i=0; i < parentListPath.length; i++) parentNode = parentNode.content![parentListPath[i]];
-
-          if(parentNode && parentNode.content && (parentNode.content[listItemIndex]?.type as NodeType)?.name === 'list_item' ) {
-              const listNode = parentNode;
-              const listNodeContent = listNode.content!; // listNode is UL/OL, content is LIs
-              const currentListItemModelIndex = listItemIndex; // Index of current LI in UL/OL
-
-              // For PoC: always create a new empty list item after the current one.
-              // Does not handle splitting current list item's content.
-              const newEmptyListItemParagraph = this.schema.node(this.schema.nodes.paragraph, {}, [this.schema.text("")]);
-              const newListItem = this.schema.node(this.schema.nodes.list_item, {}, [newEmptyListItemParagraph]);
-
-              const newListContent = [...listNodeContent];
-              newListContent.splice(currentListItemModelIndex + 1, 0, newListItem);
-
+      if (!currentBlock ) { return; }
+      const currentBlockType = currentBlock.type as NodeType;
+      const blockContext = this.getBlockContext(currentModelPos);
+      if (blockContext && blockContext.parentOfBlock && blockContext.blockNode === currentBlock) {
+          const parentType = blockContext.parentOfBlock.type as NodeType;
+          const parentActual = blockContext.parentOfBlock;
+          if (parentType.name === 'list_item' && currentBlockType.name === 'paragraph') {
+              const listNodePath = currentModelPos.path.slice(0, currentModelPos.path.length - 2);
+              const listItemIndexInList = currentModelPos.path[currentModelPos.path.length - 2];
+              let listNode = this.currentViewDoc;
+              for(let i=0; i < listNodePath.length; i++) listNode = listNode.content![listNodePath[i]];
+              const newEmptyListItemPara = this.schema.node("paragraph", {}, [this.schema.text("")]);
+              const newListItem = this.schema.node("list_item", {}, [newEmptyListItemPara]);
+              const newListContent = [...(listNode.content || [])];
+              newListContent.splice(listItemIndexInList + 1, 0, newListItem);
               const updatedListNode = this.schema.node(listNode.type as NodeType, listNode.attrs, newListContent);
-
-              let docContent = [...(this.currentViewDoc.content || [])];
-              // This assumes list is a direct child of doc for now. Needs robust path replacement.
-              if(parentListPath.length === 1) { // List is direct child of doc
-                 docContent[parentListPath[0]] = updatedListNode;
-              } else { /* TODO: Handle nested lists */ console.warn("Enter in nested list not fully supported for path update"); }
-
-              newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, docContent);
-              // TODO: Define a more specific SimpleChange for adding list item
-              this.lastAppliedChange = { type: 'splitNode', path: [modelBlockIndex, modelInlineNodeIndex], offset: textOffset, newParaPathIndex: modelBlockIndex + 1 }; // Placeholder change type
+              let tempDoc = this.currentViewDoc;
+              let parentRef = tempDoc;
+              for(let i=0; i<listNodePath.length -1; i++) parentRef = parentRef.content![listNodePath[i]];
+              const newParentContent = [...(parentRef.content || [])];
+              newParentContent[listNodePath[listNodePath.length-1]] = updatedListNode;
+              const newGrandParent = this.schema.node(parentRef.type as NodeType, parentRef.attrs, newParentContent);
+              if (parentRef === tempDoc) { newDoc = newGrandParent; }
+              else {
+                  const topLevelIndex = listNodePath[0];
+                  const newTopLevelContent = [...(this.currentViewDoc.content||[])];
+                  newTopLevelContent[topLevelIndex] = newGrandParent;
+                  newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newTopLevelContent);
+              }
+              this.lastAppliedChange = { type: 'insertNode', path: [...listNodePath, listItemIndexInList + 1], node: newListItem };
+          } else if (parentType.name === 'blockquote' && currentBlockType.name === 'paragraph') {
+              const blockquoteNode = parentActual;
+              const paraIndexInBlockquote = currentModelPos.path[currentModelPos.path.length -1];
+              const newParagraphInBlockquote = this.schema.node("paragraph", {}, [this.schema.text("")]);
+              const newBlockquoteContent = [...(blockquoteNode.content || [])];
+              newBlockquoteContent.splice(paraIndexInBlockquote + 1, 0, newParagraphInBlockquote);
+              const updatedBlockquote = this.schema.node(blockquoteNode.type as NodeType, blockquoteNode.attrs, newBlockquoteContent);
+              const newDocContent = [...(this.currentViewDoc.content || [])];
+              newDocContent[modelBlockIndex] = updatedBlockquote;
+              newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+              this.lastAppliedChange = { type: 'insertNode', path: [modelBlockIndex, paraIndexInBlockquote + 1], node: newParagraphInBlockquote};
           }
       }
-
-      if(!newDoc) { // Default paragraph split if not handled by list logic
-        const currentParaContent = currentBlock.content || [];
-        const targetModelTextNode = currentParaContent?.[modelInlineNodeIndex] as ModelTextNode | undefined;
+      if(!newDoc) {
+        const currentBlockContent = currentBlock.content || [];
+        const targetModelTextNode = currentBlockContent?.[modelInlineNodeIndex] as ModelTextNode | undefined;
         const textBefore = (targetModelTextNode && targetModelTextNode.type.name === 'text') ? targetModelTextNode.text.slice(0, textOffset) : "";
         const textAfter = (targetModelTextNode && targetModelTextNode.type.name === 'text') ? targetModelTextNode.text.slice(textOffset) : "";
         const marksFromSplit = (targetModelTextNode && targetModelTextNode.type.name === 'text') ? targetModelTextNode.marks || [] : [];
         let resolvedInlineIndex = modelInlineNodeIndex === -1 ? 0 : modelInlineNodeIndex;
-
-        let currentParaInlineNodes: BaseNode[] = [];
-        for (let i = 0; i < resolvedInlineIndex; i++) if(currentParaContent[i]) currentParaInlineNodes.push(currentParaContent[i]);
-        if (textBefore) currentParaInlineNodes.push(this.schema.text(textBefore, marksFromSplit));
-        const nodeAtSplitPoint = currentParaContent[resolvedInlineIndex];
+        let currentBlockInlineNodes: BaseNode[] = [];
+        for (let i = 0; i < resolvedInlineIndex; i++) if(currentBlockContent[i]) currentBlockInlineNodes.push(currentBlockContent[i]);
+        if (textBefore) currentBlockInlineNodes.push(this.schema.text(textBefore, marksFromSplit));
+        const nodeAtSplitPoint = currentBlockContent[resolvedInlineIndex];
         if (nodeAtSplitPoint && (nodeAtSplitPoint.type as NodeType).name !== 'text' && textOffset === 1) {
-            currentParaInlineNodes.push(nodeAtSplitPoint);
+            currentBlockInlineNodes.push(nodeAtSplitPoint);
         }
-        currentParaInlineNodes = this.modelUtils.normalizeInlineArray(currentParaInlineNodes);
-
+        currentBlockInlineNodes = this.modelUtils.normalizeInlineArray(currentBlockInlineNodes);
         let newParaInlineNodes: BaseNode[] = [this.schema.text(textAfter, marksFromSplit)];
         if (nodeAtSplitPoint && (nodeAtSplitPoint.type as NodeType).name !== 'text' && textOffset === 0) {
             newParaInlineNodes = [nodeAtSplitPoint, ...newParaInlineNodes];
         }
-        for (let i = resolvedInlineIndex + 1; i < currentParaContent.length; i++) if(currentParaContent[i]) newParaInlineNodes.push(currentParaContent[i]);
+        for (let i = resolvedInlineIndex + 1; i < currentBlockContent.length; i++) if(currentBlockContent[i]) newParaInlineNodes.push(currentBlockContent[i]);
         newParaInlineNodes = this.modelUtils.normalizeInlineArray(newParaInlineNodes);
-
-        const updatedCurrentBlock = this.schema.node(currentBlock.type as NodeType, currentBlock.attrs, currentParaInlineNodes);
-        // By default, new block is a paragraph. If splitting a heading, it becomes a paragraph.
+        const updatedCurrentBlock = this.schema.node(currentBlock.type as NodeType, currentBlock.attrs, currentBlockInlineNodes);
         const newGeneratedBlock = this.schema.node("paragraph", null, newParaInlineNodes);
         const newDocContent = [...(this.currentViewDoc.content || [])];
         newDocContent.splice(modelBlockIndex, 1, updatedCurrentBlock, newGeneratedBlock);
         newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
-        this.lastAppliedChange = {
-          type: 'splitNode',
-          path: [modelBlockIndex, resolvedInlineIndex],
-          offset: textOffset,
-          newParaPathIndex: modelBlockIndex + 1
-        };
+        this.lastAppliedChange = { type: 'splitNode', path: [modelBlockIndex, resolvedInlineIndex], offset: textOffset, newParaPathIndex: modelBlockIndex + 1 };
       }
-
     } else if ((event.inputType === 'deleteContentBackward' || event.inputType === 'deleteContentForward') && currentModelPos) {
       event.preventDefault();
       const modelParaIndex = currentModelPos.path[0];
       const modelInlineNodeIndex = currentModelPos.path.length > 1 ? currentModelPos.path[1] : -1;
       const textOffset = currentModelPos.offset;
       const modelParagraph = this.currentViewDoc.content?.[modelParaIndex];
-      if (!modelParagraph || !modelParagraph.content || modelInlineNodeIndex === -1) { console.warn("Delete: Invalid para/content/inlineIdx"); return; }
+      if (!modelParagraph || !modelParagraph.content || modelInlineNodeIndex === -1) { return; }
       const targetModelTextNode = modelParagraph.content[modelInlineNodeIndex] as ModelTextNode | undefined;
-      if (!targetModelTextNode || targetModelTextNode.type.name !== 'text') { console.warn("Delete: Target not text"); return; }
+      if (!targetModelTextNode || targetModelTextNode.type.name !== 'text') { return; }
       let newText: string;
       const originalTextLength = targetModelTextNode.text.length;
       if (event.inputType === 'deleteContentBackward') {
-        if (textOffset === 0 && modelInlineNodeIndex === 0) { console.log("TODO: Merge on backspace at para start."); return; }
-        else if (textOffset === 0 && modelInlineNodeIndex > 0) { console.log("TODO: Merge on backspace at inline start."); return; }
+        if (textOffset === 0 && modelInlineNodeIndex === 0) { return; }
+        else if (textOffset === 0 && modelInlineNodeIndex > 0) { return; }
         newText = targetModelTextNode.text.slice(0, textOffset - 1) + targetModelTextNode.text.slice(textOffset);
         this.lastAppliedChange = { type: 'deleteText', path: [modelParaIndex, modelInlineNodeIndex], offset: textOffset - 1, length: 1 };
       } else {
-        if (textOffset === originalTextLength && modelInlineNodeIndex === modelParagraph.content.length -1) { console.log("TODO: Merge on delete at para end."); return; }
-        else if (textOffset === originalTextLength) { console.log("TODO: Merge on delete at inline end."); return; }
+        if (textOffset === originalTextLength && modelInlineNodeIndex === modelParagraph.content.length -1) { return; }
+        else if (textOffset === originalTextLength) { return; }
         newText = targetModelTextNode.text.slice(0, textOffset) + targetModelTextNode.text.slice(textOffset + 1);
         this.lastAppliedChange = { type: 'deleteText', path: [modelParaIndex, modelInlineNodeIndex], offset: textOffset, length: 1 };
       }
@@ -458,7 +484,7 @@ export class RitorVDOM {
       }
       this.updateDocument(newDoc);
     } else {
-      if (event.defaultPrevented) { // If we prevented default but didn't make a doc change
+      if (event.defaultPrevented) {
           this.lastAppliedChange = null;
       }
     }
@@ -470,26 +496,25 @@ export class RitorVDOM {
     console.log("RitorVDOM: Handling mutations:", mutations);
     let domChangedBlock: HTMLElement | null = null;
     let modelBlockIndex = -1;
-
     const charMutation = mutations.find(m => m.type === 'characterData');
     if (charMutation && charMutation.target.parentNode) {
         let potentialBlock = charMutation.target.parentNode as HTMLElement;
-        // Updated to include list related tags and general DIV for doc root
-        while(potentialBlock && potentialBlock !== this.$el && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'DIV'].includes(potentialBlock.nodeName) ) {
+        const blockTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'DIV'];
+        while(potentialBlock && potentialBlock !== this.$el && !blockTags.includes(potentialBlock.nodeName) ) {
             potentialBlock = potentialBlock.parentNode as HTMLElement;
         }
         if (potentialBlock && potentialBlock !== this.$el) {
             domChangedBlock = potentialBlock;
         }
     }
-
     if (!domChangedBlock) {
         const selection = window.getSelection();
         if (selection && selection.rangeCount > 0) {
             let container = selection.getRangeAt(0).commonAncestorContainer;
             if (container.nodeType === Node.TEXT_NODE) container = container.parentNode!;
             let potentialBlock = container as HTMLElement;
-            while(potentialBlock && potentialBlock !== this.$el && !['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'DIV'].includes(potentialBlock.nodeName)) {
+            const blockTags = ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'DIV'];
+            while(potentialBlock && potentialBlock !== this.$el && !blockTags.includes(potentialBlock.nodeName)) {
                  potentialBlock = potentialBlock.parentNode as HTMLElement;
             }
             if (potentialBlock && potentialBlock !== this.$el) {
@@ -497,93 +522,102 @@ export class RitorVDOM {
             }
         }
     }
-
-    if (!domChangedBlock && this.$el.children.length === 1 && ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'DIV'].includes(this.$el.children[0].nodeName) ) {
+    if (!domChangedBlock && this.$el.children.length === 1 && ['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'BLOCKQUOTE', 'DIV'].includes(this.$el.children[0].nodeName) ) {
         domChangedBlock = this.$el.children[0] as HTMLElement;
     }
-
     if (domChangedBlock) modelBlockIndex = Array.from(this.$el.children).indexOf(domChangedBlock);
     else { this.isReconciling = false; this.lastAppliedChange = null; return; }
-
     if (modelBlockIndex !== -1 && this.currentViewDoc.content && modelBlockIndex < this.currentViewDoc.content.length) {
       const oldModelBlock = this.currentViewDoc.content[modelBlockIndex];
       const oldModelBlockType = oldModelBlock.type as NodeType;
-
-      // Allow reconciliation for paragraph, heading, and list items (which contain paragraphs)
-      if (!['paragraph', 'heading', 'list_item'].includes(oldModelBlockType.name)) {
-          // If it's a UL or OL itself, its direct content is LIs, not inline.
-          // Reconciling whole lists based on text content is too naive.
-          // For now, only reconcile content of blocks that are expected to have direct inline content or paragraphs (like LI).
+      if (!['paragraph', 'heading', 'list_item', 'blockquote'].includes(oldModelBlockType.name)) {
           if(['bullet_list', 'ordered_list'].includes(oldModelBlockType.name)) {
-              console.warn(`RitorVDOM (MutationObserver): Mutations on list containers (UL/OL) are not deeply reconciled by this PoC. Re-rendering based on textContent might be lossy.`);
-              // Potentially, one could try to parse all LIs here. For PoC, this is too complex.
-              // A simple textContent approach for the whole list would destroy its structure.
-              // We might just let it be, or if structure changed (e.g. LI added/removed), it's a childList mutation on UL/OL.
+              console.warn(`RitorVDOM (MutationObserver): Mutations on list containers (UL/OL) are not deeply reconciled by this PoC.`);
           } else {
             console.warn(`RitorVDOM (MutationObserver): Block type ${oldModelBlockType.name} not handled for detailed reconciliation.`);
           }
           this.isReconciling = false; this.lastAppliedChange = null; return;
       }
-
       console.log(`RitorVDOM (MutationObserver): Reconciling block ${oldModelBlockType.name} at index ${modelBlockIndex}. DOM Tag: ${domChangedBlock.nodeName}`);
-
-      const newInlineNodesFromDOM: BaseNode[] = [];
-      // If the block is a list_item, its children are paragraphs. We need to reconcile those paragraphs.
-      // This simplified version will take all childNodes of the LI (which should be P according to schema)
-      // and make them one flat array of inline content for a *single* new paragraph. This is wrong for multi-para LIs.
-      // TODO: If oldModelBlockType.name === 'list_item', need to iterate its child paragraphs from DOM and reconcile each.
-      if (domChangedBlock && domChangedBlock.childNodes) {
-          domChangedBlock.childNodes.forEach(childDomNode => { // If LI, childDomNode is P. We need P's children.
-            // This needs to be recursive or smarter for list_item > paragraph > inline content.
-            // For now, if childDomNode is P (inside LI), take its children. Otherwise, assume it's inline.
-            let nodesToParseForInline: NodeListOf<ChildNode> | ChildNode[] = [childDomNode];
-            if(oldModelBlockType.name === 'list_item' && childDomNode.nodeName === 'P') {
-                nodesToParseForInline = childDomNode.childNodes;
-            } else if (oldModelBlockType.name === 'list_item' && childDomNode.nodeName !== 'P') {
-                // Stray node inside LI that's not a P, treat as text for now.
-            }
-
-
-            nodesToParseForInline.forEach(inlineDomNode => {
-                if (inlineDomNode.nodeType === Node.TEXT_NODE) newInlineNodesFromDOM.push(this.schema.text(inlineDomNode.textContent || ''));
-                else if (inlineDomNode.nodeType === Node.ELEMENT_NODE) {
-                  const el = inlineDomNode as HTMLElement; const textContent = el.textContent || '';
-                  switch (el.nodeName) {
-                    case 'STRONG': const mB = this.schema.marks.bold; newInlineNodesFromDOM.push(this.schema.text(textContent, mB ? [mB.create()] : [])); break;
-                    case 'EM': const mI = this.schema.marks.italic; newInlineNodesFromDOM.push(this.schema.text(textContent, mI ? [mI.create()] : [])); break;
-                    case 'BR': newInlineNodesFromDOM.push(this.schema.node("hard_break")); break;
-                    case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6':
-                      console.warn(`RitorVDOM (MutationObserver): Found nested block ${el.nodeName} during inline parsing. Taking text only.`);
-                      newInlineNodesFromDOM.push(this.schema.text(textContent));
-                      break;
-                    default: newInlineNodesFromDOM.push(this.schema.text(textContent));
-                  }
-                }
-            });
-
+      let newContentForBlock: BaseNode[];
+      if (oldModelBlockType.name === 'blockquote') {
+          newContentForBlock = [];
+          Array.from(domChangedBlock.children).forEach(childElement => {
+              if (childElement.nodeName === 'P') {
+                  const pInlineNodes: BaseNode[] = [];
+                  childElement.childNodes.forEach(pChild => {
+                      if (pChild.nodeType === Node.TEXT_NODE) pInlineNodes.push(this.schema.text(pChild.textContent || ''));
+                      else if (pChild.nodeType === Node.ELEMENT_NODE) {
+                          const el = pChild as HTMLElement;
+                          if(el.nodeName === 'STRONG') pInlineNodes.push(this.schema.text(el.textContent || '', [this.schema.marks.bold.create()]));
+                          else if(el.nodeName === 'EM') pInlineNodes.push(this.schema.text(el.textContent || '', [this.schema.marks.italic.create()]));
+                          else if(el.nodeName === 'S') pInlineNodes.push(this.schema.text(el.textContent || '', [this.schema.marks.strikethrough.create()]));
+                          else if(el.nodeName === 'A') {
+                            const href = el.getAttribute('href');
+                            const title = el.getAttribute('title');
+                            const linkMark = this.schema.marks.link;
+                            if (linkMark && href) pInlineNodes.push(this.schema.text(el.textContent || '', [linkMark.create({href, title})]));
+                            else pInlineNodes.push(this.schema.text(el.textContent || ''));
+                          }
+                          else if(el.nodeName === 'BR') pInlineNodes.push(this.schema.node("hard_break"));
+                          else pInlineNodes.push(this.schema.text(el.textContent || ''));
+                      }
+                  });
+                  newContentForBlock.push(this.schema.node("paragraph", {}, this.modelUtils.normalizeInlineArray(pInlineNodes)));
+              } else {
+                  console.warn(`Unexpected element ${childElement.nodeName} in blockquote during mutation parse, treating as new P.`);
+                  newContentForBlock.push(this.schema.node("paragraph", {}, [this.schema.text(childElement.textContent || "")]));
+              }
           });
-      }
-      const normalizedInlineContent = this.modelUtils.normalizeInlineArray(newInlineNodesFromDOM);
-      // Re-create the block with its original type and attributes, but new content
-      // If oldModelBlock was list_item, its content should be paragraphs.
-      let finalContentForBlock: BaseNode[];
-      if(oldModelBlockType.name === 'list_item') {
-          finalContentForBlock = [this.schema.node("paragraph", {}, normalizedInlineContent)]; // Wrap in a paragraph
+          if (newContentForBlock.length === 0) {
+              newContentForBlock = [this.schema.node("paragraph", {}, [this.schema.text("")])];
+          }
       } else {
-          finalContentForBlock = normalizedInlineContent;
+          const newInlineNodesFromDOM: BaseNode[] = [];
+          let nodesToParseInline = domChangedBlock.childNodes;
+          if(oldModelBlockType.name === 'list_item' && domChangedBlock.firstElementChild?.nodeName === 'P') {
+              nodesToParseInline = domChangedBlock.firstElementChild.childNodes;
+          }
+          nodesToParseInline.forEach(inlineDomNode => {
+            if (inlineDomNode.nodeType === Node.TEXT_NODE) newInlineNodesFromDOM.push(this.schema.text(inlineDomNode.textContent || ''));
+            else if (inlineDomNode.nodeType === Node.ELEMENT_NODE) {
+              const el = inlineDomNode as HTMLElement; const textContent = el.textContent || '';
+              switch (el.nodeName) {
+                case 'STRONG': const mB = this.schema.marks.bold; newInlineNodesFromDOM.push(this.schema.text(textContent, mB ? [mB.create()] : [])); break;
+                case 'EM': const mI = this.schema.marks.italic; newInlineNodesFromDOM.push(this.schema.text(textContent, mI ? [mI.create()] : [])); break;
+                case 'S': case 'DEL': case 'STRIKE': const mS = this.schema.marks.strikethrough; newInlineNodesFromDOM.push(this.schema.text(textContent, mS ? [mS.create()] : [])); break;
+                case 'A':
+                    const href = el.getAttribute('href');
+                    const title = el.getAttribute('title');
+                    const linkMark = this.schema.marks.link;
+                    if(linkMark && href) newInlineNodesFromDOM.push(this.schema.text(textContent, [linkMark.create({href, title})]));
+                    else newInlineNodesFromDOM.push(this.schema.text(textContent));
+                    break;
+                case 'BR': newInlineNodesFromDOM.push(this.schema.node("hard_break")); break;
+                case 'H1': case 'H2': case 'H3': case 'H4': case 'H5': case 'H6':
+                  console.warn(`RitorVDOM (MutationObserver): Found nested block ${el.nodeName} during inline parsing. Taking text only.`);
+                  newInlineNodesFromDOM.push(this.schema.text(textContent));
+                  break;
+                default: newInlineNodesFromDOM.push(this.schema.text(textContent));
+              }
+            }
+          });
+          const normalizedInlineContent = this.modelUtils.normalizeInlineArray(newInlineNodesFromDOM);
+          if(oldModelBlockType.name === 'list_item') {
+              newContentForBlock = [this.schema.node("paragraph", {}, normalizedInlineContent)];
+          } else {
+              newContentForBlock = normalizedInlineContent;
+          }
       }
-
-      const newModelBlock = this.schema.node(oldModelBlockType, oldModelBlock.attrs, finalContentForBlock);
+      const newModelBlock = this.schema.node(oldModelBlockType, oldModelBlock.attrs, newContentForBlock);
       const newDocContent = [...(this.currentViewDoc.content || [])];
       newDocContent[modelBlockIndex] = newModelBlock;
       const newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
-
       if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
         this.undoManager.add(this.currentViewDoc);
       }
       this.updateDocument(newDoc);
     } else console.warn("RitorVDOM: Changed block not found in model or model out of sync.");
-
     Promise.resolve().then(() => {
         this.isReconciling = false;
         this.updateModelSelectionState();
@@ -591,126 +625,96 @@ export class RitorVDOM {
     });
   }
 
-  // Simple position mapping - PoC
   private mapModelPosition(pos: ModelPosition, change: SimpleChange): ModelPosition {
     let { path: currentPath, offset: currentOffset } = pos;
     let newPath = [...currentPath];
-
     if (!currentPath || currentPath.length === 0 || !change.path || change.path.length === 0) {
       return { path: newPath, offset: currentOffset };
     }
-
     const changeBlockIndex = change.path[0];
     const posBlockIndex = newPath[0];
-
     if (change.type === 'transformBlock') {
         if (changeBlockIndex === posBlockIndex) {
-            if (change.newType.name === 'heading' || change.newType.name === 'bullet_list' || change.newType.name === 'ordered_list' ) {
-                // When transforming a P to a list or heading, selection often goes to start.
-                // If new node has content (e.g. a list_item > paragraph > textnode), path needs to reflect that.
-                if (change.newType.name.endsWith("_list")) { // bullet_list or ordered_list
-                    // Path should be [blockIdx, 0 (list_item), 0 (paragraph), 0 (textnode)]
-                    newPath = [changeBlockIndex, 0, 0, 0];
-                } else { // heading
-                    newPath = [changeBlockIndex, 0]; // Path to first (empty) text node in heading
-                }
+            if (change.newType.name === 'heading' || change.newType.name === 'blockquote' || change.newType.name.endsWith("_list")) {
+                if (change.newType.name.endsWith("_list")) { newPath = [changeBlockIndex, 0, 0, 0]; }
+                else if (change.newType.name === 'blockquote') { newPath = [changeBlockIndex, 0, 0]; }
+                else { newPath = [changeBlockIndex, 0]; }
                 currentOffset = 0;
             }
         }
         return { path: newPath, offset: currentOffset };
     }
-
     if (changeBlockIndex !== posBlockIndex) {
-        if (change.type === 'splitNode') {
-            if (change.newParaPathIndex <= posBlockIndex) {
-                newPath[0] += 1;
-            }
+        if (change.type === 'splitNode') { if (change.newParaPathIndex <= posBlockIndex) { newPath[0] += 1; } }
+        else if (change.type === 'insertNode') {
+            if (change.path[0] === posBlockIndex) { if (newPath.length > 1 && change.path[1] <= newPath[1]) newPath[1] +=1; }
         }
         return { path: newPath, offset: currentOffset };
     }
-
     const changeInlineIndex = change.path.length > 1 ? change.path[1] : -1;
     const posInlineIndex = newPath.length > 1 ? newPath[1] : -1;
-
     if (change.type === 'insertText') {
-        if (posInlineIndex === changeInlineIndex && currentOffset >= change.offset) {
-            currentOffset += change.length;
-        }
+        if (posInlineIndex === changeInlineIndex && currentOffset >= change.offset) { currentOffset += change.length; }
     } else if (change.type === 'deleteText') {
         if (posInlineIndex === changeInlineIndex) {
-            if (currentOffset > change.offset + change.length) {
-                currentOffset -= change.length;
-            } else if (currentOffset > change.offset) {
-                currentOffset = change.offset;
-            }
+            if (currentOffset > change.offset + change.length) { currentOffset -= change.length; }
+            else if (currentOffset > change.offset) { currentOffset = change.offset; }
         }
     } else if (change.type === 'splitNode') {
         const splitAtInlineIndex = change.path[1];
-        if (posInlineIndex === splitAtInlineIndex && currentOffset >= change.offset) {
-            newPath[0] = change.newParaPathIndex;
-            // If new paragraph is part of a list item, path needs to be longer
-            const newBlock = this.currentViewDoc.content?.[change.newParaPathIndex]; // This is state *before* update, not good
-                                                                                // Need to inspect the structure of the *newly created* block
-                                                                                // For this PoC, assume it's a simple paragraph for offset calculation.
-            newPath[1] = 0; // Content after split starts at inline index 0 of new para's content
-            currentOffset = currentOffset - change.offset;
-        } else if (posInlineIndex > splitAtInlineIndex) {
-            newPath[0] = change.newParaPathIndex;
-            newPath[1] = posInlineIndex - (splitAtInlineIndex + 1);
+        if (posBlockIndex === change.path[0]) {
+            if (posInlineIndex === splitAtInlineIndex && currentOffset >= change.offset) {
+                newPath[0] = change.newParaPathIndex;
+                const newBlockAfterSplit = this.currentViewDoc.content?.[change.newParaPathIndex];
+                if (newBlockAfterSplit && (newBlockAfterSplit.type as NodeType).name === 'paragraph' && newBlockAfterSplit.content && newBlockAfterSplit.content[0]?.type.name === 'text') {
+                    newPath[1] = 0;
+                } else { newPath.length = 1; }
+                currentOffset = currentOffset - change.offset;
+            } else if (posInlineIndex > splitAtInlineIndex) {
+                newPath[0] = change.newParaPathIndex;
+                newPath[1] = posInlineIndex - (splitAtInlineIndex + 1);
+            }
         }
+    } else if (change.type === 'insertNode') {
+        if (posBlockIndex === change.path[0] && newPath.length > 1 && change.path.length > 1 && change.path[1] <= newPath[1]) {
+             newPath[1] +=1;
+        }
+    } else if (change.type === 'formatMark') {
+        // No change for PoC, assuming no node merging/splitting from simple mark changes.
     }
     return { path: newPath, offset: currentOffset };
   }
 
   public updateDocument(newDoc: BaseNode): void {
     let selectionToRestore = this.currentModelSelection;
-
     if (selectionToRestore && this.lastAppliedChange) {
         const mappedAnchor = this.mapModelPosition(selectionToRestore.anchor, this.lastAppliedChange);
         const mappedHead = this.mapModelPosition(selectionToRestore.head, this.lastAppliedChange);
         selectionToRestore = { anchor: mappedAnchor, head: mappedHead };
     }
-
     this.lastAppliedChange = null;
-
     if (this.currentViewDoc && (this.currentViewDoc === newDoc || this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc))) {
        if(selectionToRestore) this.applyModelSelectionToDom(selectionToRestore);
        this.updateModelSelectionState();
-       if (this.isReconciling) {
-           Promise.resolve().then(() => { this.isReconciling = false; });
-       }
+       if (this.isReconciling) { Promise.resolve().then(() => { this.isReconciling = false; }); }
        return;
     }
-
     if (newDoc.type !== this.schema.topNodeType) {
         console.error(`Invalid document root type. Expected ${this.schema.topNodeType.name}, got ${(newDoc.type as NodeType).name}`);
-        if (this.isReconciling) {
-            Promise.resolve().then(() => { this.isReconciling = false; });
-        }
+        if (this.isReconciling) { Promise.resolve().then(() => { this.isReconciling = false; }); }
         return;
     }
-
     this.currentViewDoc = newDoc;
     this.domPatcher.patch(this.currentViewDoc);
-
-    if (selectionToRestore) {
-        this.applyModelSelectionToDom(selectionToRestore);
-    }
+    if (selectionToRestore) { this.applyModelSelectionToDom(selectionToRestore); }
     this.updateModelSelectionState();
-
     console.log("Document updated successfully.");
     console.log("Current HTML:", this.$el.innerHTML);
-
-    if (this.isReconciling) {
-        Promise.resolve().then(() => { this.isReconciling = false; });
-    }
+    if (this.isReconciling) { Promise.resolve().then(() => { this.isReconciling = false; }); }
   }
 
   public undo(): void {
-    if (!this.undoManager.hasUndo()) {
-        console.log("Nothing to undo");
-        return;
-    }
+    if (!this.undoManager.hasUndo()) { console.log("Nothing to undo"); return; }
     const prevState = this.undoManager.undo(this.currentViewDoc);
     if (prevState) {
         this.isReconciling = true;
@@ -724,10 +728,7 @@ export class RitorVDOM {
   }
 
   public redo(): void {
-    if (!this.undoManager.hasRedo()) {
-        console.log("Nothing to redo");
-        return;
-    }
+    if (!this.undoManager.hasRedo()) { console.log("Nothing to redo"); return; }
     const nextState = this.undoManager.redo(this.currentViewDoc);
     if (nextState) {
         this.isReconciling = true;
@@ -741,10 +742,7 @@ export class RitorVDOM {
   }
 
   public addParagraph(text: string): void {
-    if (!this.currentViewDoc.content) {
-        console.error("Current document has no content array to add to.");
-        return;
-    }
+    if (!this.currentViewDoc.content) { return; }
     const newParagraph = this.schema.node("paragraph", null, [this.schema.text(text)]);
     const newContent = [...this.currentViewDoc.content, newParagraph];
     const newDoc = this.schema.node("doc", null, newContent);
@@ -756,19 +754,12 @@ export class RitorVDOM {
 
   public changeParagraphText(paraIndex: number, newText: string): void {
     const currentContent = this.currentViewDoc.content;
-    if (!currentContent || paraIndex < 0 || paraIndex >= currentContent.length) {
-      console.warn(`Paragraph index ${paraIndex} out of bounds or document has no content.`);
-      return;
-    }
-
+    if (!currentContent || paraIndex < 0 || paraIndex >= currentContent.length) return;
     const newContent = currentContent.map((block, index) => {
-      const blockNodeType = block.type as NodeType;
-      if (index === paraIndex && blockNodeType.name === 'paragraph') {
+      if (index === paraIndex && (block.type as NodeType).name === 'paragraph') {
         return this.schema.node("paragraph", null, [this.schema.text(newText)]);
-      }
-      return block;
+      } return block;
     });
-
     const newDoc = this.schema.node("doc", null, newContent);
     if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
         this.undoManager.add(this.currentViewDoc);
@@ -778,27 +769,20 @@ export class RitorVDOM {
 
   public toggleBoldOnFirstWordInParagraph(paraIndex: number): void {
     const currentContent = this.currentViewDoc.content;
-    if (!currentContent || paraIndex < 0 || paraIndex >= currentContent.length) {
-      console.warn(`Paragraph index ${paraIndex} out of bounds or document has no content.`);
-      return;
-    }
-
+    if (!currentContent || paraIndex < 0 || paraIndex >= currentContent.length) return;
     const newContent = currentContent.map((block, index): BaseNode => {
-      const blockNodeType = block.type as NodeType;
-      if (index === paraIndex && blockNodeType.name === 'paragraph') {
+      if (index === paraIndex && (block.type as NodeType).name === 'paragraph') {
         const paraNode = block;
         if (!paraNode.content || paraNode.content.length === 0) return paraNode;
         const firstInlineNode = paraNode.content[0];
-        const firstInlineNodeType = firstInlineNode.type as NodeType;
-        if (firstInlineNodeType.name !== 'text') return paraNode;
+        if ((firstInlineNode.type as NodeType).name !== 'text') return paraNode;
         const textNode = firstInlineNode as ModelTextNode;
         const words = textNode.text.split(/(\s+)/);
         if (words.length === 0 || words[0].length === 0) return paraNode;
-        const firstWord = words[0];
-        const restOfText = words.slice(1).join('');
+        const firstWord = words[0]; const restOfText = words.slice(1).join('');
         const currentMarks = textNode.marks || [];
         const boldMarkTypeFromSchema = this.schema.marks.bold;
-        if (!boldMarkTypeFromSchema) { console.warn("Bold mark type not defined in schema."); return paraNode; }
+        if (!boldMarkTypeFromSchema) return paraNode;
         const isBold = currentMarks.some(mark => mark.type === boldMarkTypeFromSchema);
         let newFirstWordMarks: AnyMark[];
         if (isBold) newFirstWordMarks = currentMarks.filter(mark => mark.type !== boldMarkTypeFromSchema);
@@ -807,8 +791,7 @@ export class RitorVDOM {
         if (restOfText) newInlineNodes.push(this.schema.text(restOfText, currentMarks));
         newInlineNodes.push(...paraNode.content.slice(1));
         return this.schema.node("paragraph", null, newInlineNodes);
-      }
-      return block;
+      } return block;
     });
     const newDoc = this.schema.node("doc", null, newContent);
     if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
@@ -816,6 +799,193 @@ export class RitorVDOM {
     }
     this.updateDocument(newDoc);
   }
+
+  public toggleMark(markTypeOrName: MarkType | string, attrs?: Attrs): void {
+    this.updateModelSelectionState();
+    if (!this.currentModelSelection) { console.warn("toggleMark: No selection."); return; }
+    const markType = typeof markTypeOrName === 'string' ? this.schema.marks[markTypeOrName] : markTypeOrName;
+    if (!markType) { console.error(`toggleMark: MarkType "${markTypeOrName}" not found.`); return; }
+    const sel = this.currentModelSelection;
+    const isCollapsed = sel.anchor.path.join(',') === sel.head.path.join(',') && sel.anchor.offset === sel.head.offset;
+    if (isCollapsed) { console.log("toggleMark: Collapsed selection (TODO: stored marks)."); return; }
+    this._applyMarkToRange(sel, markType, attrs);
+  }
+
+  private _applyMarkToRange(selection: ModelSelection, markType: MarkType, attrs: Attrs | null = {}): void { // attrs can be null for removal
+    const fromPos = this._orderPositions(selection.anchor, selection.head)[0];
+    const toPos = this._orderPositions(selection.anchor, selection.head)[1];
+
+    if (fromPos.path[0] !== toPos.path[0]) { // Multi-block not supported for PoC
+        console.warn("_applyMarkToRange: Multi-block selection not supported for PoC."); return;
+    }
+    const blockIndex = fromPos.path[0];
+    const targetBlock = this.currentViewDoc.content?.[blockIndex];
+    if (!targetBlock || !targetBlock.content || !(targetBlock.type as NodeType).allowsMarkType(markType) ) return;
+
+    let newInlineContent: BaseNode[] = [];
+    let markAppliedOrRemoved = false;
+
+    // Determine if we are adding or removing the mark (based on content at start of selection)
+    let shouldAddMark = true;
+    if (attrs === null) { // Explicit removal
+        shouldAddMark = false;
+    } else { // Toggle or add with specific attrs
+        const firstNodeIndex = fromPos.path[1];
+        const firstNode = targetBlock.content[firstNodeIndex];
+        if (firstNode && (firstNode.type as NodeType).isText) {
+            const textN = firstNode as ModelTextNode;
+            const marks = textN.marks || [];
+            if(marks.some(m => m.type === markType && JSON.stringify(m.attrs || null) === JSON.stringify(attrs || null))) {
+                 shouldAddMark = false; // Mark with same attrs exists, so toggle means remove
+            }
+        }
+    }
+
+    targetBlock.content.forEach((inlineNode, index) => {
+      if ((inlineNode.type as NodeType).isText) {
+        const textNode = inlineNode as ModelTextNode;
+        const nodeStartOffset = 0;
+        const nodeEndOffset = textNode.text.length;
+
+        const selStartIndex = fromPos.path.length > 1 && index === fromPos.path[1] ? fromPos.offset : nodeStartOffset;
+        const selEndIndex = toPos.path.length > 1 && index === toPos.path[1] ? toPos.offset : nodeEndOffset;
+
+        if (index > fromPos.path[1] && index < toPos.path[1]) { // Node fully selected
+          newInlineContent.push(this._updateTextNodeMarks(textNode, markType, attrs, shouldAddMark));
+          markAppliedOrRemoved = true;
+        } else if (index === fromPos.path[1] && index === toPos.path[1]) { // Selection within this single node
+          if (selStartIndex < selEndIndex) { // Range selection
+            newInlineContent.push(...this._splitAndApplyMarkToTextNode(textNode, selStartIndex, selEndIndex, markType, attrs, shouldAddMark));
+            markAppliedOrRemoved = true;
+          } else newInlineContent.push(textNode);
+        } else if (index === fromPos.path[1]) { // Start of selection range
+          newInlineContent.push(...this._splitAndApplyMarkToTextNode(textNode, selStartIndex, nodeEndOffset, markType, attrs, shouldAddMark));
+          markAppliedOrRemoved = true;
+        } else if (index === toPos.path[1]) { // End of selection range
+          newInlineContent.push(...this._splitAndApplyMarkToTextNode(textNode, nodeStartOffset, selEndIndex, markType, attrs, shouldAddMark));
+          markAppliedOrRemoved = true;
+        } else { // Node outside selection
+          newInlineContent.push(inlineNode);
+        }
+      } else { // Non-text inline node
+        newInlineContent.push(inlineNode);
+      }
+    });
+
+    if (!markAppliedOrRemoved) return;
+
+    const normalizedNewInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
+    const newBlock = this.schema.node(targetBlock.type as NodeType, targetBlock.attrs, normalizedNewInlineContent);
+    const newDocContent = [...(this.currentViewDoc.content || [])];
+    newDocContent[blockIndex] = newBlock;
+    const newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+
+    if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc)) {
+        this.undoManager.add(this.currentViewDoc);
+    }
+    this.lastAppliedChange = { type: 'formatMark', from: selection.anchor, to: selection.head, markType: markType.name, attrs };
+    this.updateDocument(newDoc);
+  }
+
+  private _splitAndApplyMarkToTextNode(textNode: ModelTextNode, start: number, end: number, markType: MarkType, attrs: Attrs | null, shouldAdd: boolean): BaseNode[] {
+    const result: BaseNode[] = [];
+    const text = textNode.text;
+    const marks = textNode.marks || [];
+
+    if (start > 0) result.push(this.schema.text(text.slice(0, start), marks));
+
+    const selectedText = text.slice(start, end);
+    if (selectedText) {
+        let newMarks = shouldAdd ?
+            (marks.some(m => m.type === markType && JSON.stringify(m.attrs || null) === JSON.stringify(attrs || null)) ?
+                marks : [...marks, markType.create(attrs || undefined)]) :
+            marks.filter(m => !(m.type === markType && (attrs === null || JSON.stringify(m.attrs || null) === JSON.stringify(attrs || null))));
+
+        // Ensure no duplicate mark types if adding (e.g. bold then bold again)
+        if (shouldAddMark && attrs !== null) {
+            newMarks = newMarks.filter((m, i, self) => i === self.findIndex(t => t.type === m.type));
+        }
+        result.push(this.schema.text(selectedText, newMarks));
+    }
+
+    if (end < text.length) result.push(this.schema.text(text.slice(end), marks));
+    return result;
+  }
+
+  private _updateTextNodeMarks(textNode: ModelTextNode, markType: MarkType, attrs: Attrs | null, shouldAdd: boolean): BaseNode {
+    let currentMarks = textNode.marks || [];
+    if (shouldAdd && attrs !== null) { // Add or update mark
+        // Remove existing mark of same type, then add new one (to update attrs)
+        currentMarks = currentMarks.filter(m => m.type !== markType);
+        currentMarks = [...currentMarks, markType.create(attrs)];
+    } else { // Remove mark (attrs is null or shouldAdd is false based on prior check)
+        currentMarks = currentMarks.filter(m => m.type !== markType);
+    }
+    return this.schema.text(textNode.text, currentMarks);
+  }
+
+  private _getMarkAttrsInSelection(markType: MarkType): Attrs | null {
+      if (!this.currentModelSelection) return null;
+      // Simplified: check the marks at the start of the selection (anchor)
+      const pos = this.currentModelSelection.anchor;
+      if (pos.path.length < 2) return null; // Needs to be within inline content
+
+      const block = this.currentViewDoc.content?.[pos.path[0]];
+      if (!block || !block.content) return null;
+      const inlineNode = block.content[pos.path[1]];
+
+      if (inlineNode && (inlineNode.type as NodeType).isText) {
+          const textNode = inlineNode as ModelTextNode;
+          const existingMark = (textNode.marks || []).find(m => m.type === markType);
+          return existingMark ? existingMark.attrs : null;
+      }
+      return null;
+  }
+
+  private _orderPositions(pos1: ModelPosition, pos2: ModelPosition): [ModelPosition, ModelPosition] {
+      // Simplified: assumes paths are comparable by array order and then offset
+      if (pos1.path.join(',') < pos2.path.join(',') || (pos1.path.join(',') === pos2.path.join(',') && pos1.offset < pos2.offset)) {
+          return [pos1, pos2];
+      }
+      return [pos2, pos1];
+  }
+
+  public promptAndSetLink(): void {
+    this.updateModelSelectionState();
+    const selection = this.currentModelSelection;
+    if (!selection || (selection.anchor.path.join(',') === selection.head.path.join(',') && selection.anchor.offset === selection.head.offset)) {
+         alert("Please select text to create or edit a link.");
+         return;
+    }
+    const linkMarkType = this.schema.marks.link;
+    if (!linkMarkType) { console.error("Link mark type not defined in schema."); return; }
+
+    const existingAttrs = this._getMarkAttrsInSelection(linkMarkType);
+    const currentHref = existingAttrs ? (existingAttrs.href as string || "") : "https://";
+
+    const href = window.prompt("Enter link URL:", currentHref);
+
+    if (href === null) return; // User cancelled
+    this.toggleLink(href);
+  }
+
+  public toggleLink(href?: string | null): void {
+    this.updateModelSelectionState();
+    const selection = this.currentModelSelection;
+    if (!selection || (selection.anchor.path.join(',') === selection.head.path.join(',') && selection.anchor.offset === selection.head.offset)) {
+        console.log("toggleLink: Collapsed selection, no action for PoC.");
+        return;
+    }
+    const linkMarkType = this.schema.marks.link;
+    if(!linkMarkType) return;
+
+    if (href && href.trim() !== "") {
+        this._applyMarkToRange(selection, linkMarkType, { href });
+    } else {
+        this._applyMarkToRange(selection, linkMarkType, null);
+    }
+  }
+
 
   public getDocJson(): string {
       return JSON.stringify(this.currentViewDoc, null, 2);
