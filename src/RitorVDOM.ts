@@ -11,6 +11,7 @@ import { ModelUtils } from './modelUtils.js';
 import { ModelSelection, ModelPosition } from './selection.js';
 import { UndoManager } from './undoManager.js';
 import { Attrs } from './schemaSpec.js';
+import { DOMParser as RitorDOMParser } from './domParser.js'; // Added import
 
 type SimpleChange =
   | { type: 'insertText'; path: number[]; offset: number; length: number }
@@ -20,7 +21,8 @@ type SimpleChange =
     }
   | { type: 'transformBlock'; path: number[]; newType: NodeType; newAttrs?: any }
   | { type: 'insertNode'; path: number[]; node: BaseNode }
-  | { type: 'formatMark'; from: ModelPosition, to: ModelPosition, markType: string, attrs?: Attrs };
+  | { type: 'formatMark'; from: ModelPosition, to: ModelPosition, markType: string, attrs?: Attrs }
+  | { type: 'paste'; path: number[]; offset: number; numBlocksInserted?: number; inlineContentLength?: number }; // For paste
 
 export class RitorVDOM {
   public $el: HTMLElement;
@@ -29,6 +31,7 @@ export class RitorVDOM {
   public readonly schema: Schema;
   private modelUtils: ModelUtils;
   private undoManager: UndoManager;
+  private domParser: RitorDOMParser; // Added domParser instance
   private isReconciling: boolean = false;
   private observer: MutationObserver;
   public currentModelSelection: ModelSelection | null = null;
@@ -46,9 +49,10 @@ export class RitorVDOM {
     this.schema = schema || new Schema({ nodes: basicNodeSpecs, marks: basicMarkSpecs });
     this.modelUtils = new ModelUtils(this.schema);
     this.undoManager = new UndoManager();
+    this.domParser = new RitorDOMParser(this.schema); // Initialize domParser
 
     this.currentViewDoc = this.schema.node("doc", null, [
-      this.schema.node("paragraph", null, [
+      this.schema.node("paragraph", {id: this.schema.generateNodeId()}, [ // Ensure initial nodes have IDs
         ...this.modelUtils.normalizeInlineArray([this.schema.text("Hello VDOM world!")])
       ])
     ]);
@@ -98,235 +102,510 @@ export class RitorVDOM {
     parentOfBlock: BaseNode | null,
     pathFromParentToBlock: number[]
   } | null {
-    // ... (implementation from previous step - assuming it's correct for now)
     if (!modelPos || !this.currentViewDoc.content) return null;
     const path = modelPos.path;
     if (path.length === 0) return null;
     let currentParent: BaseNode = this.currentViewDoc;
     let finalBlockNode: BaseNode | null = null;
-    let finalBlockIndex = -1; // This will be index in currentParent.content
+    let finalBlockIndex = -1;
     let finalParentOfBlock: BaseNode | null = this.currentViewDoc;
-    let finalPathInParent: number[] = []; // This will be the path segment from finalParentOfBlock
+    let finalPathInParent : number[] = [];
 
-    for (let i = 0; i < path.length; i++) {
+    for(let i=0; i < path.length; i++) {
         const index = path[i];
         const parentContent = currentParent.content;
         if (!parentContent || index >= parentContent.length) return null;
-
         const nodeAtPath = parentContent[index];
         const nodeAtPathType = nodeAtPath.type as NodeType;
-
-        if (nodeAtPathType.isBlock || i === path.length -1 && nodeAtPathType.spec.inline) { // Found a block or the target inline node's container
+        if (nodeAtPathType.isBlock) {
             finalParentOfBlock = currentParent;
-            finalBlockNode = nodeAtPathType.isBlock ? nodeAtPath : currentParent; // If inline, block is currentParent
-            finalBlockIndex = nodeAtPathType.isBlock ? index : path[i-1] ?? 0; // Index in finalParentOfBlock.content
-            finalPathInParent = [finalBlockIndex];
-
-            // If nodeAtPath is the block we need context for (it's a block itself)
-            if(nodeAtPathType.isBlock && i === path.length -1) {
-                // Path points to this block, so it's the blockNode
-            } else if (!nodeAtPathType.isBlock && i === path.length -1) {
-                // Path points to an inline node, so finalBlockNode is its parent (currentParent)
-                // finalBlockIndex is the index of currentParent in ITS parent
-                // This logic needs to be careful based on how deep the path is.
-                // Let's assume path[0] is always top-level block.
-                // If path is [blockIdx, inlineIdx], currentParent at end of loop is the block.
-                // blockNode is currentParent, parentOfBlock is doc, blockIndex is path[0]
-                if (i > 0) { // currentParent is a nested block (e.g. list_item, blockquote)
-                    let gp = this.currentViewDoc;
-                    for(let k=0; k < i-1; k++) gp = gp.content![path[k]];
-                    finalParentOfBlock = gp;
-                    finalBlockIndex = path[i-1];
-                    finalPathInParent = [path[i-1]];
-                    finalBlockNode = currentParent; // The block containing the inline node
-                } else { // Inline node is in a top-level block
-                    finalBlockNode = currentParent; // Should be the doc
-                    finalBlockIndex = index; // This is the block index
-                    finalPathInParent = [index];
-                    finalParentOfBlock = this.currentViewDoc;
+            finalBlockNode = nodeAtPath;
+            finalBlockIndex = index;
+            finalPathInParent = [index];
+            if (i < path.length -1) { currentParent = nodeAtPath; }
+        } else if (nodeAtPathType.isText || nodeAtPathType.spec.inline) {
+            finalBlockNode = currentParent;
+            if(currentParent !== this.currentViewDoc) {
+                let grandParent = this.currentViewDoc;
+                let searchPath = path.slice(0, i);
+                finalPathInParent = [searchPath[searchPath.length-1]];
+                for(let k=0; k < searchPath.length -1; k++) {
+                    grandParent = grandParent.content![searchPath[k]];
                 }
+                finalParentOfBlock = grandParent;
+                finalBlockIndex = searchPath[searchPath.length-1];
+            } else {
+                finalBlockIndex = path[0];
+                finalPathInParent = [path[0]];
             }
-            // If selection is on the block itself (path.length is 1, e.g. [paraIndex])
-            // blockNode is that block, parent is doc, blockIndex is paraIndex
-            if (path.length === 1 && nodeAtPathType.isBlock) {
-                finalBlockNode = nodeAtPath;
-                finalBlockIndex = index;
-                finalParentOfBlock = this.currentViewDoc;
-                finalPathInParent = [index];
-            }
-
             break;
         }
-        if (!nodeAtPath.content) return null; // Cannot go deeper
-        currentParent = nodeAtPath;
     }
     if (!finalBlockNode) return null;
-    return { blockNode: finalBlockNode, blockIndex: finalBlockIndex, parentOfBlock: finalParentOfBlock, pathInParent: finalPathInParent };
+    return { blockNode: finalBlockNode, blockIndex: finalPathInParent[0], parentOfBlock: finalParentOfBlock, pathInParent: finalPathInParent };
   }
 
-  // Overhauled domToModelPosition
-  private domToModelPosition(domNode: globalThis.Node, domOffset: number): ModelPosition | null {
-    const path: number[] = [];
-    let_finalOffset = domOffset;
-    let currentDomNode: globalThis.Node | null = domNode;
-
-    // TODO: Handle case where domNode is $el itself (e.g. empty editor, selection on root)
-
-    // Step 1: If it's a text node, the offset is char offset. Move to parent for path calculation.
-    if (currentDomNode.nodeType === Node.TEXT_NODE) {
-      _finalOffset = domOffset; // Character offset
-      currentDomNode = currentDomNode.parentNode;
-    } else if (currentDomNode.nodeType === Node.ELEMENT_NODE) {
-      // If selection is on an element, domOffset is the index of the child node *after* which selection is.
-      // For model, if path points to an element, offset means "before child at index".
-      // So, if domOffset is 0, it's before first child. If 1, it's after first (before second).
-      _finalOffset = domOffset; // Child index or character offset if contentEditable places cursor inside element
-    } else {
-      return null; // Unknown node type
-    }
-
-    if (!currentDomNode) return null;
-
-    // Step 2: Traverse up the DOM tree from the parent of the text node (or the element itself)
-    // until we reach this.$el, collecting indices.
-    let domWalker: HTMLElement | null = currentDomNode as HTMLElement;
-    while (domWalker && domWalker !== this.$el) {
-      const parent = domWalker.parentNode;
-      if (!parent) return null; // Should not happen if domWalker is not $el
-
-      // Find index of domWalker among its siblings that are actual element nodes
-      // (ignoring text nodes or comments between block elements, for example)
-      // This is crucial if the DOM isn't a clean 1:1 map of model block nodes.
-      // For PoC, assume rendered DOM children of $el (and list items, blockquotes) are direct model elements.
-      let domIndex = -1;
-      let elementSiblingCount = 0;
-      for(let i=0; i < parent.childNodes.length; i++) {
-          const sibling = parent.childNodes[i];
-          if (sibling === domWalker) {
-              domIndex = elementSiblingCount; // Or `i` if simple childNodes mapping is okay for now
-              break;
-          }
-          if (sibling.nodeType === Node.ELEMENT_NODE) { // Only count element nodes for path indices
-            // This needs to be smarter: count only elements that map to schema block/inline types
-            // For now, any element node.
-            elementSiblingCount++;
-          }
+  // TODO: SELECTION MAPPING - CRITICAL FOR ROBUSTNESS (domToModelPosition)
+  private _domToModelPositionRecursive(
+    targetDomNode: globalThis.Node,
+    targetDomOffset: number,
+    currentModelParentNode: BaseNode,
+    currentDomParentMatchingModel: HTMLElement,
+    modelPathToCurrentParent: number[]
+  ): ModelPosition | null {
+    if (!currentModelParentNode.content) {
+      if ((currentModelParentNode.type as NodeType).isText && currentDomParentMatchingModel === targetDomNode.parentNode && targetDomNode.nodeType === Node.TEXT_NODE) {
+        return { path: modelPathToCurrentParent, offset: targetDomOffset };
       }
-      if (domIndex === -1) return null; // Should not happen
-
-      path.unshift(domIndex);
-      domWalker = parent as HTMLElement;
-      if (domWalker === this.$el) break;
+      console.warn("_domToModelPositionRecursive: currentModelParentNode has no content or is not a direct text match.", currentModelParentNode, targetDomNode);
+      return null;
     }
 
-    if (domWalker !== this.$el && path.length === 0) { // e.g. selection directly on $el itself, not its children
-        if (domNode === this.$el) { // Selection on the root $el
-            return { path: [], offset: domOffset }; // Path to doc, offset is child block index
+    let currentDomChildNode: globalThis.Node | null = currentDomParentMatchingModel.firstChild;
+    let modelCharOffsetAccumulator = 0; // Accumulates char length of *previous model siblings*
+
+    for (let modelChildIndex = 0; modelChildIndex < currentModelParentNode.content.length; modelChildIndex++) {
+      const childModelNode = currentModelParentNode.content[modelChildIndex];
+      const childModelNodeType = childModelNode.type as NodeType;
+      const currentModelPathSegment = [...modelPathToCurrentParent, modelChildIndex];
+
+      if (!currentDomChildNode) {
+        break;
+      }
+
+      const advanceToNextMeaningfulDomSibling = (startNode: globalThis.Node | null): globalThis.Node | null => {
+          let node = startNode;
+          while(node && node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim() === "") {
+              node = node.nextSibling;
+          }
+          return node;
+      };
+
+      currentDomChildNode = advanceToNextMeaningfulDomSibling(currentDomChildNode);
+      if (!currentDomChildNode) break;
+
+      let domNodeProcessedForThisModelChild = currentDomChildNode;
+
+      if (childModelNodeType.isText) {
+        const modelTextNode = childModelNode as ModelTextNode;
+
+        // findTextRecursive explores the DOM structure corresponding to *this single modelTextNode*.
+        // It needs to determine if targetDomNode is within this structure.
+        // `modelCharOffsetAccumulator` is the offset *before* this modelTextNode.
+        const findTextRecursive = (
+            currentSearchDomNode: globalThis.Node, // Current DOM node being explored (text or element mark)
+            baseModelOffsetForNode: number // Model offset corresponding to the start of currentSearchDomNode's text content
+        ): ModelPosition | null => { // Returns full ModelPosition if target found
+            if (currentSearchDomNode.nodeType === Node.TEXT_NODE) {
+                if (currentSearchDomNode === targetDomNode) {
+                    // Target found. baseModelOffsetForNode is char offset up to this text node's start.
+                    // targetDomOffset is char offset within this specific targetDomNode.
+                    return { path: currentModelPathSegment, offset: baseModelOffsetForNode + targetDomOffset };
+                }
+                return null; // Target not this text node
+            }
+
+            if (currentSearchDomNode.nodeType === Node.ELEMENT_NODE) { // Mark element
+                if (currentSearchDomNode === targetDomNode) { // Selection is ON the mark element itself
+                    // targetDomOffset is the child index within this mark element.
+                    // Calculate the character length of children before targetDomOffset-th child.
+                    let charLengthBeforeTargetChild = 0;
+                    for (let k = 0; k < targetDomOffset; k++) {
+                        charLengthBeforeTargetChild += currentSearchDomNode.childNodes[k]?.textContent?.length || 0;
+                    }
+                    // The model offset is the base offset + this character length.
+                    return { path: currentModelPathSegment, offset: baseModelOffsetForNode + charLengthBeforeTargetChild };
+                }
+
+                // Recursively search within this mark element's children
+                let accumulatedCharLengthWithinMark = 0;
+                for (let k = 0; k < currentSearchDomNode.childNodes.length; k++) {
+                    const innerDomNode = currentSearchDomNode.childNodes[k];
+                    const result = findTextRecursive(innerDomNode, baseModelOffsetForNode + accumulatedCharLengthWithinMark);
+                    if (result) return result; // Target found in recursion
+                    accumulatedCharLengthWithinMark += innerDomNode.textContent?.length || 0;
+                }
+            }
+            return null; // Target not found in this branch
+        };
+
+        const resultInTextNodeOrMarks = findTextRecursive(currentDomChildNode, modelCharOffsetAccumulator);
+        if (resultInTextNodeOrMarks) return resultInTextNodeOrMarks;
+
+        modelCharOffsetAccumulator += modelTextNode.text.length;
+
+      } else if (childModelNodeType.spec.atom) {
+        if (currentDomChildNode === targetDomNode) {
+          return { path: currentModelPathSegment, offset: targetDomOffset === 0 ? 0 : 1 };
         }
-        return null; // Did not reach root, or invalid path
+        if (currentDomChildNode.parentNode === targetDomNode) {
+            const atomIndexInParent = Array.from(targetDomNode.childNodes).indexOf(currentDomChildNode as ChildNode);
+            if (targetDomOffset === atomIndexInParent) return { path: currentModelPathSegment, offset: 0 }; // Before atom
+            if (targetDomOffset === atomIndexInParent + 1) return { path: currentModelPathSegment, offset: 1 }; // After atom
+        }
+        modelCharOffsetAccumulator += 1;
+      } else {
+        console.warn("Unhandled nested non-atom inline model node in _domToModelPositionRecursive", childModelNode);
+      }
+      currentDomChildNode = domNodeProcessedForThisModelChild.nextSibling;
     }
 
-    // At this point, `path` is the path of DOM element indices from $el to the parent of the original domNode (if text)
-    // or to the domNode itself (if element). `_finalOffset` is char offset if text, or child index if element.
-
-    // Now, we need to refine this path and offset to match the ModelPosition definition.
-    // If original domNode was text, path points to its parent element. Offset is char offset.
-    // If original domNode was element, path points to it. Offset is child index.
-
-    // This simplified iterative DOM walk returns a path of DOM element indices.
-    // It does not yet perfectly map to model structure if DOM has extra wrappers or non-model elements.
-    // For PoC, we assume a close mapping.
-    // If the original domNode was a text node, path leads to its parent element.
-    // The last element in path is the inline node index.
-    // Example: <p><span>text</span></p>. Sel on "text". path might be [paraIdx, spanIdx]. Offset is char in text.
-    // ModelPosition wants path to parent of target, then offset.
-    // If target is text node: path=[paraIdx, spanIdx], offset=charOffset.
-    // If target is element (e.g. paragraph): path=[paraIdx], offset=childIdx.
-
-    // This needs to be made much more robust by consulting the schema and model structure.
-    // For now, this is a very rough DOM-based path.
-    return { path, offset: _finalOffset };
-  }
-
-  // Overhauled modelToDomPosition
-  private modelToDomPosition(modelPos: ModelPosition): { node: globalThis.Node; offset: number } | null {
-    let currentDomNode: HTMLElement = this.$el;
-    let currentModelNodes: ReadonlyArray<BaseNode> | undefined = this.currentViewDoc.content;
-
-    // Traverse based on path to find the parent DOM element of the target position
-    for (let i = 0; i < modelPos.path.length; i++) {
-      const modelNodeIndex = modelPos.path[i];
-      if (!currentModelNodes || modelNodeIndex >= currentModelNodes.length) {
-        console.error("modelToDomPosition: Invalid model path or index out of bounds.", modelPos, currentModelNodes);
-        return null;
-      }
-
-      const modelNode = currentModelNodes[modelNodeIndex];
-      // Find corresponding DOM child. This assumes direct mapping based on rendered IDs or order.
-      // For block nodes with IDs:
-      let foundDomChild: HTMLElement | null = null;
-      if ((modelNode.type as NodeType).isBlock && modelNode.attrs?.id) {
-          foundDomChild = currentDomNode.querySelector(`#${modelNode.attrs.id}`) as HTMLElement;
-      } else { // For inline nodes or blocks without reliable ID query, rely on index
-          // This needs to be more robust if there are non-rendered model nodes or extra DOM wrappers.
-          // For PoC, assume currentDomNode.children maps to modelNodeContainer.
-          if (currentDomNode.children[modelNodeIndex]) {
-            foundDomChild = currentDomNode.children[modelNodeIndex] as HTMLElement;
-          } else {
-             // Attempt to use childNodes if children (elements only) fails.
-             // This might happen if model has text/inline nodes directly under a block
-             // that doesn't create wrapper elements for all of them.
-             if (currentDomNode.childNodes[modelNodeIndex] && currentDomNode.childNodes[modelNodeIndex].nodeType === Node.ELEMENT_NODE) {
-                 foundDomChild = currentDomNode.childNodes[modelNodeIndex] as HTMLElement;
-             } else if (currentDomNode.childNodes[modelNodeIndex] && i === modelPos.path.length -1 && (modelNode.type as NodeType).isText) {
-                 // Path ends on a text node, target is this text node
-                 targetDomNode = currentDomParent.childNodes[inlineNodeIndex];
-                 if (targetDomNode && targetDomNode.nodeType === Node.TEXT_NODE) {
-                    return { node: targetDomNode, offset: Math.min(modelPos.offset, (targetDomNode.textContent || "").length) };
-                 }
-             }
-          }
-      }
-
-      if (!foundDomChild) {
-        console.error(`modelToDomPosition: DOM node for model path segment ${modelNodeIndex} not found.`);
-        return null;
-      }
-      currentDomNode = foundDomChild;
-      currentModelNodes = modelNode.content; // Go deeper into model content for next path segment
-
-      // If this is the last element of the path, currentDomNode is our target container or node.
-      if (i === modelPos.path.length - 1) {
-          if ((modelNode.type as NodeType).isText) { // Path points directly to a model text node
-              // Find the actual DOM text node. currentDomNode is its parent from schema rendering.
-              // This assumes text node is a direct child of currentDomNode.
-              // This is highly dependent on how renderer outputs text nodes.
-              // PoC: Assume the first text node found in currentDomNode is it, or based on offset.
-              let textChild = currentDomNode.firstChild;
-              let charCount = 0;
-              while(textChild) {
-                  if(textChild.nodeType === Node.TEXT_NODE) {
-                      const textLen = (textChild.textContent || "").length;
-                      if (modelPos.offset <= charCount + textLen) {
-                          return { node: textChild, offset: modelPos.offset - charCount };
-                      }
-                      charCount += textLen;
-                  }
-                  textChild = textChild.nextSibling;
-              }
-              // Fallback: end of the element if text node not found or offset is beyond
-              return { node: currentDomNode, offset: currentDomNode.childNodes.length };
-          } else { // Path points to an element node (block or inline atom)
-              return { node: currentDomNode, offset: modelPos.offset }; // Offset is child index or 0 for atom
-          }
-      }
+    // If selection is on the block element itself (e.g., empty paragraph)
+    if (currentDomParentMatchingModel === targetDomNode) {
+        if (currentModelParentNode.content.length === 0 && targetDomOffset === 0) { // Empty block
+            return { path: modelPathToCurrentParent, offset: 0 };
+        }
+        // If targetDomOffset refers to a child index within the block element
+        if (targetDomOffset < currentModelParentNode.content.length) { // map to start of that model child
+             return {path: [...modelPathToCurrentParent, targetDomOffset], offset: 0};
+        }
+        if (targetDomOffset >= currentModelParentNode.content.length && currentModelParentNode.content.length > 0) { // after last child
+            const lastChildIdx = currentModelParentNode.content.length -1;
+            const lastChild = currentModelParentNode.content[lastChildIdx];
+            const offsetInLast = (lastChild.type as NodeType).isText ? (lastChild as ModelTextNode).text.length : 1;
+            return {path: [...modelPathToCurrentParent, lastChildIdx], offset: offsetInLast};
+        }
+        console.warn("_domToModelPositionRecursive: Selection on block element, offset unhandled", targetDomNode, targetDomOffset);
+        return { path: modelPathToCurrentParent, offset: targetDomOffset }; // Fallback
     }
-    // Should have returned inside loop if path was valid.
+
+    // Fallback for text nodes directly under the block, not matched via model's inline structure.
+    // This implies the DOM text node doesn't correspond to any specific model inline node.
+    // In such cases, it's difficult to map accurately. Returning null is safer.
+    if (targetDomNode.parentNode === currentDomParentMatchingModel && targetDomNode.nodeType === Node.TEXT_NODE) {
+        console.warn("_domToModelPositionRecursive: Unmapped text node directly under block.", targetDomNode);
+        // Option 1: Try to place cursor relative to the end of the last known model child.
+        // This is complex because targetDomOffset is within the unmapped text node.
+        // Option 2: Return null to indicate inability to map this specific scenario.
+        return null;
+    }
     return null;
   }
 
-  // ... (rest of the RitorVDOM class, including applyModelSelectionToDom, handleBeforeInput, handleMutations, updateDocument, undo, redo, example methods)
+  private domToModelPosition(selectionDomNode: globalThis.Node, selectionDomOffset: number): ModelPosition | null {
+    let targetDomNode = selectionDomNode;
+    let targetDomOffset = selectionDomOffset;
+
+    // 1. Normalize targetDomNode and targetDomOffset
+    // If selection is on an element, domOffset is child index.
+    // If selection is in a text node, domOffset is char offset.
+    if (targetDomNode.nodeType === Node.ELEMENT_NODE) {
+      // If offset points to a child node, make that child the target.
+      // This simplifies logic as we mostly care about char offsets in text or positions relative to atoms.
+      if (targetDomNode.childNodes.length > 0 && targetDomOffset < targetDomNode.childNodes.length) {
+        targetDomNode = targetDomNode.childNodes[targetDomOffset];
+        targetDomOffset = 0; // Offset is now 0 within this new targetDomNode (or at its start)
+      } else if (targetDomNode.childNodes.length > 0 && targetDomOffset >= targetDomNode.childNodes.length) {
+        // Selection is after the last child of this element
+        targetDomNode = targetDomNode.childNodes[targetDomOffset -1];
+        targetDomOffset = (targetDomNode.nodeType === Node.TEXT_NODE) ? (targetDomNode.textContent?.length || 0) : 1;
+      }
+      // If element is empty, targetDomOffset remains 0 relative to the element itself.
+    }
+
+    // 2. Find the parent block DOM element and its model representation.
+    let currentDomElem: HTMLElement | null = targetDomNode.nodeType === Node.TEXT_NODE ?
+                                            targetDomNode.parentNode as HTMLElement :
+                                            targetDomNode as HTMLElement;
+    let modelBlockNode: BaseNode | null = null;
+    let modelBlockPath: number[] = [];
+
+    while (currentDomElem && currentDomElem !== this.$el) {
+      const id = currentDomElem.id;
+      if (id && this.currentViewDoc.content) {
+        const blockIndex = this.currentViewDoc.content.findIndex(n => n.attrs?.id === id);
+        if (blockIndex !== -1) {
+          modelBlockNode = this.currentViewDoc.content[blockIndex];
+          modelBlockPath = [blockIndex];
+          break;
+        }
+      }
+      currentDomElem = currentDomElem.parentNode as HTMLElement | null;
+    }
+
+    if (!modelBlockNode || !currentDomElem) {
+      // Special case: selection is directly in $el or $el has no identifiable blocks
+      if (selectionDomNode === this.$el) return { path: [], offset: selectionDomOffset }; // Path to root
+      console.warn("domToModelPosition: Containing block not found or not identifiable by ID.");
+      // Fallback: try to find based on direct children of $el if no ID matched
+      if (this.currentViewDoc.content && this.currentViewDoc.content.length > 0) {
+          let blockIndex = -1;
+          if (currentDomElem && currentDomElem.parentNode === this.$el) {
+              blockIndex = Array.from(this.$el.children).indexOf(currentDomElem);
+          } else if (targetDomNode.parentNode === this.$el) { // e.g. text node directly in $el
+              blockIndex = Array.from(this.$el.childNodes).indexOf(targetDomNode);
+          } else if (targetDomNode === this.$el && this.$el.children.length > 0) {
+              // If selection is on $el, and domOffset points to a block child
+              if (selectionDomOffset < this.$el.children.length) {
+                 const childBlock = this.$el.children[selectionDomOffset] as HTMLElement;
+                 const childBlockId = childBlock.id;
+                 if (childBlockId) {
+                    blockIndex = this.currentViewDoc.content.findIndex(n => n.attrs?.id === childBlockId);
+                 }
+                 if (blockIndex === -1) blockIndex = selectionDomOffset; // Fallback to index
+              }
+          }
+
+
+          if (blockIndex !== -1 && blockIndex < this.currentViewDoc.content.length) {
+              modelBlockNode = this.currentViewDoc.content[blockIndex];
+              modelBlockPath = [blockIndex];
+              currentDomElem = this.$el.children[blockIndex] as HTMLElement; // This is the identified block's DOM
+          } else {
+            console.warn("domToModelPosition: Fallback to find block by index failed or out of bounds.");
+            return null;
+          }
+      } else {
+        return null; // No content in doc, or other unhandled scenarios
+      }
+    }
+
+    // 3. Recursively find position within the block
+    const result = this._domToModelPositionRecursive(targetDomNode, targetDomOffset, modelBlockNode, currentDomElem, modelBlockPath);
+    if (!result) {
+        console.warn(`domToModelPosition: _domToModelPositionRecursive failed to find precise position within block.`);
+        // If recursive step fails, it means a precise inline position wasn't found.
+        // Returning null is safer than a potentially incorrect broad fallback to the block level
+        // with an offset that might not make sense in that context.
+        return null;
+    }
+    return result;
+  }
+
+
+  private _mapModelToDomInline(
+    targetModelNode: BaseNode, // The specific inline model node (e.g. TextNode, HardBreakNode)
+    targetModelOffset: number, // Offset within this targetModelNode
+    parentDomElement: HTMLElement, // The DOM element corresponding to the parent of targetModelNode
+    parentModelNode: BaseNode // The parent model node containing targetModelNode
+  ): { node: globalThis.Node; offset: number } | null {
+    if (!parentModelNode.content) return null;
+
+    let currentDomChild: globalThis.Node | null = parentDomElement.firstChild;
+    // cumulativeModelCharOffset is not strictly needed here as in domToModel,
+    // because we are finding a specific targetModelNode first.
+
+    const advanceToNextMeaningfulDomSibling = (startNode: globalThis.Node | null): globalThis.Node | null => {
+        let node = startNode;
+        while(node && node.nodeType === Node.TEXT_NODE && (node.textContent || "").trim() === "") {
+            node = node.nextSibling;
+        }
+        return node;
+    };
+
+    for (const modelChild of parentModelNode.content) {
+      currentDomChild = advanceToNextMeaningfulDomSibling(currentDomChild);
+      if (!currentDomChild) {
+        console.error("_mapModelToDomInline: Ran out of DOM children while searching for model child.", modelChild, parentDomElement);
+        return null;
+      }
+
+      if (modelChild === targetModelNode) { // Found the target model node in parent's content
+        if ((targetModelNode.type as NodeType).isText) {
+          // Target is a TextNode. currentDomChild should be its DOM representation (text or mark element).
+          // We need to find the actual text node and apply targetModelOffset.
+
+          const findDomTextNodeRecursive = (
+            seekerDomNode: globalThis.Node, // current DOM node we are looking into
+            offsetToReachInModel: number // char offset we need to reach in model text
+          ): { node: globalThis.Node; offset: number } | null => {
+            if (seekerDomNode.nodeType === Node.TEXT_NODE) {
+              const textLength = seekerDomNode.textContent?.length || 0;
+              if (offsetToReachInModel <= textLength) {
+                return { node: seekerDomNode, offset: offsetToReachInModel };
+              }
+              // This specific DOM text node is shorter than offsetToReachInModel.
+              // This implies offsetToReachInModel is in a *subsequent* DOM text node
+              // that is part of the same model TextNode (e.g. due to browser splitting, though less common with our rendering).
+              // Or, offset is out of bounds. For robustness, cap at end of current node.
+              console.warn(`_mapModelToDomInline (findDomTextNodeRecursive): offset ${offsetToReachInModel} is beyond text node length ${textLength}.`);
+              return { node: seekerDomNode, offset: textLength };
+            }
+
+            if (seekerDomNode.nodeType === Node.ELEMENT_NODE) { // Mark element
+              let accumulatedCharLengthWithinMark = 0;
+              for (let k = 0; k < seekerDomNode.childNodes.length; k++) {
+                const innerDomNode = seekerDomNode.childNodes[k];
+                // The offset to reach in the recursive call is relative to the start of innerDomNode's content
+                const offsetForNextRecursion = Math.max(0, offsetToReachInModel - accumulatedCharLengthWithinMark);
+                const result = findDomTextNodeRecursive(innerDomNode, offsetForNextRecursion);
+
+                if (result) { // If a valid text node and offset was found by the recursive call
+                    return result; // Propagate the valid result upwards
+                }
+                // If no result from recursion, it means target is not in this innerDomNode,
+                // OR target *was* in it, but offsetToReachInModel was < 0 for it (handled by Math.max(0, ...)).
+                // So, we add this innerDomNode's length to accumulatedCharLengthWithinMark and continue to the next sibling.
+                accumulatedCharLengthWithinMark += innerDomNode.textContent?.length || 0;
+
+                // If the original offsetToReachInModel falls within the character span of THIS innerDomNode,
+                // but it wasn't a text node itself and recursive call didn't find a text node (e.g. it's an empty mark or other element),
+                // then the position is effectively at the boundary.
+                // This is for cases like <em>|</em> where | is model offset 0 inside an empty em.
+                if (offsetToReachInModel >= accumulatedCharLengthWithinMark - (innerDomNode.textContent?.length ||0) && offsetToReachInModel < accumulatedCharLengthWithinMark ) {
+                    // Position is likely at the end of the previous node or start of this one, relative to seekerDomNode
+                    return { node: seekerDomNode, offset: k + 1};
+                }
+              }
+              // If offsetToReachInModel is beyond all children's text content, place at end of this mark element
+              if (offsetToReachInModel >= accumulatedCharLengthWithinMark) {
+                return { node: seekerDomNode, offset: seekerDomNode.childNodes.length };
+              }
+            }
+            return null;
+          };
+
+          const result = findDomTextNodeRecursive(currentDomChild, targetModelOffset);
+          if (result) return result;
+
+          console.warn("_mapModelToDomInline: Text node not found precisely, falling back to parentDomElement.", targetModelNode, targetModelOffset);
+          return { node: parentDomElement, offset: parentDomElement.childNodes.length }; // Fallback
+
+        } else if ((targetModelNode.type as NodeType).spec.atom) { // Atom node (e.g., hard_break)
+          // currentDomChild is the <br> (or similar).
+          // targetModelOffset is 0 (before) or 1 (after).
+          // The DOM selection offset is relative to parentDomElement.
+          const atomIndex = Array.from(parentDomElement.childNodes).indexOf(currentDomChild as ChildNode);
+          if (atomIndex === -1) { console.error("Atom DOM node not found in parent"); return null; }
+          return { node: parentDomElement, offset: atomIndex + targetModelOffset };
+        }
+      }
+      // If not the targetModelNode, advance currentDomChild to its next sibling for the next modelChild.
+      currentDomChild = currentDomChild.nextSibling;
+    }
+    console.error("_mapModelToDomInline: Target model node not found among parent's children.", targetModelNode, parentModelNode);
+    return null;
+  }
+
+
+  // Overhauled modelToDomPosition
+  private modelToDomPosition(modelPos: ModelPosition): { node: globalThis.Node; offset: number } | null {
+    if (!modelPos || !modelPos.path || modelPos.path.length === 0) {
+        console.warn("modelToDomPosition: Invalid ModelPosition provided.", modelPos);
+        if (modelPos && modelPos.path && modelPos.path.length === 0) { // Path to doc itself
+            const firstChild = this.$el.firstChild;
+            if (firstChild) { // Position at start of first child of editor
+                return { node: firstChild.nodeType === Node.TEXT_NODE ? firstChild : this.$el, offset: 0 };
+            }
+            return { node: this.$el, offset: 0}; // Empty editor
+        }
+        return null;
+    }
+
+    let currentModelParent: BaseNode = this.currentViewDoc;
+    let currentDomParent: HTMLElement = this.$el;
+    // targetModelNode will be identified at the end of the loop, or if path has only 1 segment.
+
+    // 1. Traverse path to find the DOM element for the direct parent of the target model node.
+    // Example: modelPos path [b, i, t], b=blockIdx, i=inlineParentIdx, t=textNodeIdx
+    // Loop runs for b and i. currentModelParent becomes model.content[b].content[i]. currentDomParent becomes its DOM.
+    // Target will be currentModelParent.content[t].
+    for (let depth = 0; depth < modelPos.path.length - 1; depth++) {
+      const modelNodeIndex = modelPos.path[depth];
+      if (!currentModelParent.content || modelNodeIndex >= currentModelParent.content.length) {
+        console.error("modelToDomPosition: Invalid model path segment (parent traversal).", modelPos, depth);
+        return null;
+      }
+      const nextModelNodeAsParent = currentModelParent.content[modelNodeIndex];
+      let nextDomElementAsParent: HTMLElement | null = null;
+
+      // Find DOM element for nextModelNodeAsParent, which is a child of currentDomParent
+      let domChild = currentDomParent.firstChild;
+      let modelSiblingCounter = 0;
+      let foundDomForNextModelParent = false;
+      while(domChild) {
+        // This simple counter assumes direct model-to-DOM element mapping at block/list_item level
+        // TODO: This needs to be more robust for complex list structures or nested blocks if ever introduced.
+        if (domChild.nodeType === Node.ELEMENT_NODE) {
+            // Check if this DOM element corresponds to nextModelNodeAsParent
+            // Priority for ID match if available
+            if ((nextModelNodeAsParent.type as NodeType).isBlock && nextModelNodeAsParent.attrs?.id && (domChild as HTMLElement).id === nextModelNodeAsParent.attrs.id) {
+                nextDomElementAsParent = domChild as HTMLElement;
+                foundDomForNextModelParent = true;
+                break;
+            }
+            // Fallback to index if no ID or ID didn't match this one
+            if (modelSiblingCounter === modelNodeIndex && !nextModelNodeAsParent.attrs?.id) { // Only use index if no ID on model
+                 nextDomElementAsParent = domChild as HTMLElement;
+                 foundDomForNextModelParent = true;
+                 // Don't break, continue to see if an ID match is found later (stronger)
+            }
+            modelSiblingCounter++;
+        }
+        domChild = domChild.nextSibling;
+      }
+      // If after checking all children, we relied on an indexed match (and no ID match was found or applicable)
+      if (!foundDomForNextModelParent && nextDomElementAsParent) {
+          foundDomForNextModelParent = true;
+      }
+      // If still no match, and model had ID, try querySelector as last resort (if DOM isn't flat)
+      if (!foundDomForNextModelParent && (nextModelNodeAsParent.type as NodeType).isBlock && nextModelNodeAsParent.attrs?.id) {
+          const foundById = currentDomParent.querySelector(`#${nextModelNodeAsParent.attrs.id}`);
+          if (foundById && foundById.parentNode === currentDomParent) { // Must be direct child
+              nextDomElementAsParent = foundById as HTMLElement;
+              foundDomForNextModelParent = true;
+          }
+      }
+
+
+      if (!foundDomForNextModelParent || !nextDomElementAsParent) {
+        console.error(`modelToDomPosition: DOM element for model parent node at path segment ${depth} not found.`);
+        return null;
+      }
+      currentModelParent = nextModelNodeAsParent;
+      currentDomParent = nextDomElementAsParent;
+    }
+
+    // 2. Identify the actual target model node (the last segment in path)
+    const targetNodeIndex = modelPos.path[modelPos.path.length - 1];
+    if (!currentModelParent.content || targetNodeIndex >= currentModelParent.content.length) {
+      console.error("modelToDomPosition: Invalid target node index in path.", modelPos, targetNodeIndex, currentModelParent);
+      return null;
+    }
+    const targetModelNode = currentModelParent.content[targetNodeIndex];
+
+    // 3. If targetModelNode is a block, currentDomParent should be its DOM element.
+    // (This case implies modelPos.path had only one segment, e.g. [0] for the first block)
+    if ((targetModelNode.type as NodeType).isBlock) {
+      // The loop for parent traversal (length-1) would not have run if path is [idx].
+      // So currentDomParent is $el, currentModelParent is doc.
+      // We need to find the DOM element for targetModelNode (which is currentModelParent.content[targetNodeIndex])
+      let targetBlockDom: HTMLElement | null = null;
+      if (targetModelNode.attrs?.id) {
+        targetBlockDom = currentDomParent.querySelector(`#${targetModelNode.attrs.id}`) as HTMLElement;
+         if (targetBlockDom && targetBlockDom.parentNode !== currentDomParent) targetBlockDom = null; // Must be direct child
+      }
+      if (!targetBlockDom) { // Fallback to index
+          let count = 0;
+          let child = currentDomParent.firstChild;
+          while(child){
+              if(child.nodeType === Node.ELEMENT_NODE){
+                  if(count === targetNodeIndex) { targetBlockDom = child as HTMLElement; break;}
+                  count++;
+              }
+              child = child.nextSibling;
+          }
+      }
+
+      if (!targetBlockDom) {
+        console.error("modelToDomPosition: Target block DOM element not found.", targetModelNode);
+        return null;
+      }
+      // modelPos.offset is usually a child index within this block or 0.
+      if (modelPos.offset <= targetBlockDom.childNodes.length) {
+        return { node: targetBlockDom, offset: modelPos.offset };
+      }
+      return { node: targetBlockDom, offset: targetBlockDom.childNodes.length }; // Cap at end
+    } else { // Target is inline (TextNode, HardBreakNode)
+      // currentDomParent is the DOM element of the block/element containing this inline node.
+      // currentModelParent is the model block/element containing this inline node.
+      return this._mapModelToDomInline(targetModelNode, modelPos.offset, currentDomParent, currentModelParent);
+    }
+  }
+
+  // ... (rest of RitorVDOM: applyModelSelectionToDom, handleBeforeInput, handleMutations, updateDocument, undo/redo, example methods)
   // ... (ensure mapDomSelectionToModel is called in relevant places, and applyModelSelectionToDom in updateDocument)
+  // ... (SimpleChange and mapModelPosition are also present from previous step)
 
   private applyModelSelectionToDom(modelSelection: ModelSelection | null): void {
     if (!modelSelection) return;
@@ -367,7 +646,206 @@ export class RitorVDOM {
     let newDoc: BaseNode | null = null;
     this.lastAppliedChange = null;
 
-    if (event.inputType === 'insertText' && event.data && currentModelPos) {
+    // Handle word deletion first as they are specific cases of text deletion
+    if (event.inputType === 'deleteWordBackward' && currentModelPos) {
+      event.preventDefault();
+      const { path: modelPath, offset: textOffset } = currentModelPos;
+      if (modelPath.length < 2) { console.warn("deleteWordBackward: Path too short for text node."); return; }
+      const modelBlockIndex = modelPath[0];
+      const modelInlineNodeIndex = modelPath[1];
+      const currentBlockNode = this.currentViewDoc.content?.[modelBlockIndex];
+      const targetModelTextNode = currentBlockNode?.content?.[modelInlineNodeIndex] as ModelTextNode | undefined;
+
+      if (targetModelTextNode && targetModelTextNode.type.name === 'text' && textOffset > 0) {
+        const text = targetModelTextNode.text;
+        let deleteFrom = textOffset -1;
+        while(deleteFrom > 0 && text[deleteFrom -1] !== ' ') { // Find start of word or text
+            deleteFrom--;
+        }
+        const newText = text.slice(0, deleteFrom) + text.slice(textOffset);
+        const deletedLength = textOffset - deleteFrom;
+        this.lastAppliedChange = { type: 'deleteText', path: [...modelPath], offset: deleteFrom, length: deletedLength };
+
+        const newInlineContent = [...(currentBlockNode!.content || [])];
+        newInlineContent[modelInlineNodeIndex] = this.schema.text(newText, targetModelTextNode.marks);
+        const normalizedNewInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
+        const updatedBlock = this.schema.node(currentBlockNode!.type as NodeType, currentBlockNode!.attrs, normalizedNewInlineContent);
+        const newDocContent = [...(this.currentViewDoc.content || [])];
+        newDocContent[modelBlockIndex] = updatedBlock;
+        newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+      }
+    } else if (event.inputType === 'deleteWordForward' && currentModelPos) {
+      event.preventDefault();
+      const { path: modelPath, offset: textOffset } = currentModelPos;
+      if (modelPath.length < 2) { console.warn("deleteWordForward: Path too short for text node."); return; }
+      const modelBlockIndex = modelPath[0];
+      const modelInlineNodeIndex = modelPath[1];
+      const currentBlockNode = this.currentViewDoc.content?.[modelBlockIndex];
+      const targetModelTextNode = currentBlockNode?.content?.[modelInlineNodeIndex] as ModelTextNode | undefined;
+
+      if (targetModelTextNode && targetModelTextNode.type.name === 'text' && textOffset < targetModelTextNode.text.length) {
+        const text = targetModelTextNode.text;
+        let deleteTo = textOffset;
+        while(deleteTo < text.length && text[deleteTo] !== ' ') { // Find end of word or text
+            deleteTo++;
+        }
+        const newText = text.slice(0, textOffset) + text.slice(deleteTo);
+        const deletedLength = deleteTo - textOffset;
+        this.lastAppliedChange = { type: 'deleteText', path: [...modelPath], offset: textOffset, length: deletedLength };
+
+        const newInlineContent = [...(currentBlockNode!.content || [])];
+        newInlineContent[modelInlineNodeIndex] = this.schema.text(newText, targetModelTextNode.marks);
+        const normalizedNewInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
+        const updatedBlock = this.schema.node(currentBlockNode!.type as NodeType, currentBlockNode!.attrs, normalizedNewInlineContent);
+        const newDocContent = [...(this.currentViewDoc.content || [])];
+        newDocContent[modelBlockIndex] = updatedBlock;
+        newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+      }
+    } else if (event.inputType === 'formatBold') {
+        event.preventDefault();
+        if (this.schema.marks.bold) this.toggleMark(this.schema.marks.bold);
+        return; // toggleMark handles doc update and undo
+    } else if (event.inputType === 'formatItalic') {
+        event.preventDefault();
+        if (this.schema.marks.italic) this.toggleMark(this.schema.marks.italic);
+        return;
+    } else if (event.inputType === 'formatStrikeThrough') { // Note: standard inputType is 'strikethrough'
+        event.preventDefault();
+        if (this.schema.marks.strikethrough) this.toggleMark(this.schema.marks.strikethrough);
+        return;
+    } else if (event.inputType === 'strikethrough') { // Handling the standard event type
+        event.preventDefault();
+        if (this.schema.marks.strikethrough) this.toggleMark(this.schema.marks.strikethrough);
+        return;
+    } else if (event.inputType === 'insertReplacementText' && currentModelPos) {
+        event.preventDefault();
+        const textToInsert = (event.dataTransfer?.getData('text/plain') || event.data || '');
+        const targetRanges = event.getTargetRanges();
+        if (targetRanges && targetRanges.length > 0 && textToInsert) {
+            const domRange = targetRanges[0];
+            const fromDomPos = { node: domRange.startContainer, offset: domRange.startOffset };
+            const toDomPos = { node: domRange.endContainer, offset: domRange.endOffset };
+
+            const modelFrom = this.domToModelPosition(fromDomPos.node, fromDomPos.offset);
+            const modelTo = this.domToModelPosition(toDomPos.node, toDomPos.offset);
+
+            if (modelFrom && modelTo) {
+                // Simplified PoC: Assume same block, replace range with text
+                if (modelFrom.path[0] !== modelTo.path[0] || modelFrom.path.length < 2 || modelTo.path.length < 2) {
+                    console.warn("insertReplacementText: Range spans multiple blocks or is not in text, not supported for PoC. Inserting at start of range.");
+                     // Fallback: insert at modelFrom if it's valid
+                    const modelBlockIndex = modelFrom.path[0];
+                    const modelInlineNodeIndex = modelFrom.path[1];
+                    const textOffset = modelFrom.offset;
+                    const currentBlockNode = this.currentViewDoc.content?.[modelBlockIndex];
+                    const targetModelTextNode = currentBlockNode?.content?.[modelInlineNodeIndex] as ModelTextNode | undefined;
+                    if (targetModelTextNode && targetModelTextNode.type.name === 'text') {
+                        const newText = targetModelTextNode.text.slice(0, textOffset) + textToInsert + targetModelTextNode.text.slice(textOffset);
+                        this.lastAppliedChange = { type: 'insertText', path: modelFrom.path, offset: textOffset, length: textToInsert.length };
+                        const newInlineContent = [...(currentBlockNode!.content || [])];
+                        newInlineContent[modelInlineNodeIndex] = this.schema.text(newText, targetModelTextNode.marks);
+                        const norm = this.modelUtils.normalizeInlineArray(newInlineContent);
+                        const updatedBlock = this.schema.node(currentBlockNode!.type as NodeType, currentBlockNode!.attrs, norm);
+                        const newDocContent = [...(this.currentViewDoc.content || [])];
+                        newDocContent[modelBlockIndex] = updatedBlock;
+                        newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+                    } else { return; } // Cannot insert
+                } else {
+                    // Proper same-block replacement
+                    const blockIndex = modelFrom.path[0];
+                    const blockNode = this.currentViewDoc.content?.[blockIndex];
+                    if (!blockNode || !blockNode.content) return;
+
+                    let newInlineArray: BaseNode[] = [];
+                    const fromInlineIdx = modelFrom.path[1];
+                    const fromInlineOffset = modelFrom.offset;
+                    const toInlineIdx = modelTo.path[1];
+                    const toInlineOffset = modelTo.offset;
+
+                    for(let i=0; i < blockNode.content.length; i++) {
+                        const currentInlineNode = blockNode.content[i];
+                        if (i < fromInlineIdx) {
+                            newInlineArray.push(currentInlineNode);
+                        } else if (i === fromInlineIdx) {
+                            if ((currentInlineNode.type as NodeType).isText) {
+                                const textNode = currentInlineNode as ModelTextNode;
+                                if (fromInlineOffset > 0) newInlineArray.push(this.schema.text(textNode.text.slice(0, fromInlineOffset), textNode.marks));
+                            }
+                            // If fromInlineIdx === toInlineIdx, the replacement happens within this single node.
+                            if (fromInlineIdx === toInlineIdx) {
+                                newInlineArray.push(this.schema.text(textToInsert, (currentInlineNode as ModelTextNode).marks)); // Use marks of current node
+                                if ((currentInlineNode.type as NodeType).isText) {
+                                     const textNode = currentInlineNode as ModelTextNode;
+                                     if(toInlineOffset < textNode.text.length) newInlineArray.push(this.schema.text(textNode.text.slice(toInlineOffset), textNode.marks));
+                                }
+                            } else {
+                                // Replacement spans multiple inline nodes, add the textToInsert now
+                                newInlineArray.push(this.schema.text(textToInsert, (currentInlineNode as ModelTextNode).marks));
+                            }
+                        } else if (i > fromInlineIdx && i < toInlineIdx) {
+                            // Skip nodes fully within the replacement range
+                        } else if (i === toInlineIdx) {
+                            // This is the end node of the range (only if different from start node)
+                            if ((currentInlineNode.type as NodeType).isText) {
+                                const textNode = currentInlineNode as ModelTextNode;
+                                if(toInlineOffset < textNode.text.length) newInlineArray.push(this.schema.text(textNode.text.slice(toInlineOffset), textNode.marks));
+                            }
+                        } else if (i > toInlineIdx) {
+                            newInlineArray.push(currentInlineNode);
+                        }
+                    }
+                    this.lastAppliedChange = { type: 'insertText', path: [blockIndex, fromInlineIdx], offset: fromInlineOffset, length: textToInsert.length }; // Approximate change
+                    const norm = this.modelUtils.normalizeInlineArray(newInlineArray);
+                    const updatedBlock = this.schema.node(blockNode.type as NodeType, blockNode.attrs, norm);
+                    const newDocContent = [...(this.currentViewDoc.content || [])];
+                    newDocContent[blockIndex] = updatedBlock;
+                    newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+                }
+            } else { console.warn("insertReplacementText: Could not map DOM range to model.")}
+        } else { return; } // No text to insert or no target ranges
+    } else if (event.inputType === 'insertFromPaste' && currentModelPos) {
+        event.preventDefault();
+        const pastedHtml = event.dataTransfer?.getData('text/html');
+        const pastedText = event.dataTransfer?.getData('text/plain') || '';
+
+        console.log("Pasted HTML:", pastedHtml);
+        console.log("Pasted Text:", pastedText);
+
+        if (pastedHtml) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = pastedHtml;
+            const modelFragmentNodes = this.domParser.parseSlice(tempDiv);
+            console.log("Parsed from HTML:", modelFragmentNodes);
+            // TODO: Logic to insert these modelNodes into currentViewDoc at currentModelPos
+            // This would involve splitting nodes, replacing selection, etc.
+            // For now, we will still fall back to pasting plain text for simplicity in this PoC phase.
+        }
+
+        // Fallback to plain text insertion (current PoC behavior)
+        if (pastedText) {
+            // Simplified: assumes collapsed selection for paste.
+            // A real paste would replace selection if not collapsed.
+            // TODO: If selection is not collapsed, delete content in selection first.
+            const { path: modelPath, offset: textOffset } = currentModelPos;
+            if (modelPath.length < 2) { console.warn("insertFromPaste: Path too short for text node for plain text paste."); return; }
+            const modelBlockIndex = modelPath[0];
+            const modelInlineNodeIndex = modelPath[1];
+            const currentBlockNode = this.currentViewDoc.content?.[modelBlockIndex];
+            const targetModelTextNode = currentBlockNode?.content?.[modelInlineNodeIndex] as ModelTextNode | undefined;
+
+            if (targetModelTextNode && targetModelTextNode.type.name === 'text') {
+                const newText = targetModelTextNode.text.slice(0, textOffset) + pastedText + targetModelTextNode.text.slice(textOffset);
+                this.lastAppliedChange = { type: 'insertText', path: [...modelPath], offset: textOffset, length: pastedText.length };
+                const newInlineContent = [...(currentBlockNode!.content || [])];
+                newInlineContent[modelInlineNodeIndex] = this.schema.text(newText, targetModelTextNode.marks);
+                const norm = this.modelUtils.normalizeInlineArray(newInlineContent);
+                const updatedBlock = this.schema.node(currentBlockNode!.type as NodeType, currentBlockNode!.attrs, norm);
+                const newDocContent = [...(this.currentViewDoc.content || [])];
+                newDocContent[modelBlockIndex] = updatedBlock;
+                newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newDocContent);
+            } else { console.warn("insertFromPaste: Target for plain text paste not a text node."); return; }
+        } else { return; }
+    } else if (event.inputType === 'insertText' && event.data && currentModelPos) {
       const modelBlockIndex = currentModelPos.path[0];
       const modelInlineNodeIndex = currentModelPos.path.length > 1 ? currentModelPos.path[1] : -1;
       const textOffset = currentModelPos.offset;
@@ -504,7 +982,6 @@ export class RitorVDOM {
                   const newTopLevelContent = [...(this.currentViewDoc.content||[])];
                   newTopLevelContent[topLevelIndex] = newGrandParent;
                   newDoc = this.schema.node(this.currentViewDoc.type as NodeType, this.currentViewDoc.attrs, newTopLevelContent);
-
               }
               this.lastAppliedChange = { type: 'insertNode', path: [...listNodePath, listItemIndexInList + 1], node: newListItem };
           } else if (parentType.name === 'blockquote' && currentBlockType.name === 'paragraph') {
@@ -661,6 +1138,7 @@ export class RitorVDOM {
       }
 
       console.log(`RitorVDOM (MutationObserver): Reconciling block ${oldModelBlockType.name} at index ${modelBlockIndex}. DOM Tag: ${domChangedBlock.nodeName}`);
+      console.warn(`RitorVDOM (MutationObserver): The inline content reconciliation below is a basic PoC fallback and does not use a full schema-driven parser. Complex HTML changes might not be perfectly preserved.`);
 
       let newContentForBlock: BaseNode[];
 
@@ -756,69 +1234,290 @@ export class RitorVDOM {
   private mapModelPosition(pos: ModelPosition, change: SimpleChange): ModelPosition {
     let { path: currentPath, offset: currentOffset } = pos;
     let newPath = [...currentPath];
-    if (!currentPath || currentPath.length === 0 || !change.path || change.path.length === 0) {
+
+    if (!currentPath || currentPath.length === 0 || !change || !change.path || change.path.length === 0) {
       return { path: newPath, offset: currentOffset };
     }
+
     const changeBlockIndex = change.path[0];
     const posBlockIndex = newPath[0];
+
+    // Type-specific transformation logic
     if (change.type === 'transformBlock') {
-        if (changeBlockIndex === posBlockIndex) {
-            if (change.newType.name === 'heading' || change.newType.name === 'blockquote' || change.newType.name.endsWith("_list")) {
-                if (change.newType.name.endsWith("_list")) { newPath = [changeBlockIndex, 0, 0, 0]; }
-                else if (change.newType.name === 'blockquote') { newPath = [changeBlockIndex, 0, 0]; }
-                else { newPath = [changeBlockIndex, 0]; }
-                currentOffset = 0;
+      if (changeBlockIndex === posBlockIndex) {
+        // Default behavior: try to keep path and offset if block type doesn't imply content reset
+        // Specific cases for content reset:
+        if (change.newType.name === 'heading' || change.newType.name === 'blockquote' || change.newType.name.endsWith("_list")) {
+          const currentBlock = this.currentViewDoc.content?.[changeBlockIndex];
+          if (currentBlock && currentBlock.content && currentBlock.content.length > 0 && (currentBlock.content[0].type as NodeType).isText) {
+            // Path to the first text node (or equivalent) within the new structure
+            if (change.newType.name.endsWith("_list")) { // list -> list_item -> paragraph -> text_node
+              newPath = [changeBlockIndex, 0, 0, 0];
+            } else if (change.newType.name === 'blockquote') { // blockquote -> paragraph -> text_node
+              newPath = [changeBlockIndex, 0, 0];
+            } else { // heading -> text_node
+              newPath = [changeBlockIndex, 0];
             }
+          } else { // Block becomes empty or has no text content at start
+            newPath = [changeBlockIndex]; // Path to the block itself
+          }
+          currentOffset = 0; // Cursor to start
         }
-        return { path: newPath, offset: currentOffset };
+        // If not one of these types, path/offset might be preserved by default if inline structure is compatible.
+      }
+      // If transform is on a different block, current position is unaffected.
+      return { path: newPath, offset: currentOffset };
     }
+
+    // Handling changes that affect block indices (split, insert block)
+    if (change.type === 'splitNode' && change.newParaPathIndex <= posBlockIndex && changeBlockIndex < posBlockIndex) {
+      // Only increment if the split happened strictly before the current block, and the new block is also before or at current.
+      newPath[0] += 1;
+    } else if (change.type === 'insertNode' && change.path.length === 1 && change.path[0] <= posBlockIndex) {
+      // A new block was inserted at or before the current position's block.
+      newPath[0] += 1;
+    }
+
+    // If change was in a different block and not handled above, position is generally unaffected.
     if (changeBlockIndex !== posBlockIndex) {
-        if (change.type === 'splitNode') { if (change.newParaPathIndex <= posBlockIndex) { newPath[0] += 1; } }
-        else if (change.type === 'insertNode') {
-            if (change.path[0] === posBlockIndex) { if (newPath.length > 1 && change.path[1] <= newPath[1]) newPath[1] +=1; }
-        }
-        return { path: newPath, offset: currentOffset };
+      return { path: newPath, offset: currentOffset };
     }
-    const changeInlineIndex = change.path.length > 1 ? change.path[1] : -1;
-    const posInlineIndex = newPath.length > 1 ? newPath[1] : -1;
+
+    // Change is within the same block as the position.
+    // Ensure path arrays are long enough before accessing inline indices.
+    const changePathLength = change.path.length;
+    const currentPathLength = newPath.length;
+
+    const changeInlineIndex = changePathLength > 1 ? change.path[1] : -1;
+    let posInlineIndex = currentPathLength > 1 ? newPath[1] : -1;
+
+
     if (change.type === 'insertText') {
-        if (posInlineIndex === changeInlineIndex && currentOffset >= change.offset) { currentOffset += change.length; }
+      // Path must be to a text node for both change and position for this to apply.
+      if (currentPathLength > 1 && changePathLength > 1 && posInlineIndex === changeInlineIndex && currentOffset >= change.offset) {
+        currentOffset += change.length;
+      }
     } else if (change.type === 'deleteText') {
-        if (posInlineIndex === changeInlineIndex) {
-            if (currentOffset > change.offset + change.length) { currentOffset -= change.length; }
-            else if (currentOffset > change.offset) { currentOffset = change.offset; }
+      // Path must be to a text node.
+      if (currentPathLength > 1 && changePathLength > 1 && posInlineIndex === changeInlineIndex) {
+        if (currentOffset > change.offset + change.length) {
+          currentOffset -= change.length;
+        } else if (currentOffset > change.offset) {
+          currentOffset = change.offset;
         }
-    } else if (change.type === 'splitNode') {
-        const splitAtInlineIndex = change.path[1];
-        if (posBlockIndex === change.path[0]) {
-            if (posInlineIndex === splitAtInlineIndex && currentOffset >= change.offset) {
-                newPath[0] = change.newParaPathIndex;
-                const newBlockAfterSplit = this.currentViewDoc.content?.[change.newParaPathIndex];
-                if (newBlockAfterSplit && (newBlockAfterSplit.type as NodeType).name === 'paragraph' && newBlockAfterSplit.content && newBlockAfterSplit.content[0]?.type.name === 'text') {
-                    newPath[1] = 0;
-                } else { newPath.length = 1; }
-                currentOffset = currentOffset - change.offset;
-            } else if (posInlineIndex > splitAtInlineIndex) {
-                newPath[0] = change.newParaPathIndex;
-                newPath[1] = posInlineIndex - (splitAtInlineIndex + 1);
+      }
+    } else if (change.type === 'splitNode') { // Split happened in *this* block (changeBlockIndex === posBlockIndex)
+      const splitFromInlineIndex = change.path.length > 1 ? change.path[1] : -1; // Where the split occurred
+      const splitFromOffset = change.path.length > 1 ? change.offset : 0; // Offset in that inline node
+
+      if (posInlineIndex === -1 && currentPathLength === 1) { // Position is at block level e.g. empty para offset 0
+          // If split happens, this block-level position might need to move to new block if offset was > 0 (which it isn't here)
+          // Or stay if split was "at start" (offset 0). For simplicity, assume it stays unless explicitly moved.
+      } else if (currentPathLength > 1 && splitFromInlineIndex !== -1) {
+          if (posInlineIndex > splitFromInlineIndex || (posInlineIndex === splitFromInlineIndex && currentOffset >= splitFromOffset)) {
+            // Position was in the part that moved to the new block.
+            newPath[0] = change.newParaPathIndex; // Block index changes.
+            if (posInlineIndex === splitFromInlineIndex) { // Cursor was in the same inline node that got split
+              newPath[1] = 0; // Assumes content after split starts at inline index 0 in new block
+              currentOffset = currentOffset - splitFromOffset;
+            } else { // Cursor was in a subsequent inline node
+              newPath[1] = posInlineIndex - splitFromInlineIndex -1 + 0; // TODO: this assumes first node after split is text node
+                                                                    // More accurately: newPath[1] = posInlineIndex - (splitFromInlineIndex + 1);
+                                                                    // And assumes these nodes are now at the start of the new block.
+              // A safer mapping for subsequent nodes: map to the start of the new block or start of first new text node
+              newPath[1] = 0; // Simplified: move to start of first element in new block
+              // currentOffset remains same relative to start of that moved inline node, but now that node is at index 0
             }
-        }
-    } else if (change.type === 'insertNode') {
-        if (posBlockIndex === change.path[0] && newPath.length > 1 && change.path.length > 1 && change.path[1] <= newPath[1]) {
-             newPath[1] +=1;
+          }
+          // If position was before the split point, it remains in the original block, path/offset unchanged by this logic here.
+      }
+    } else if (change.type === 'insertNode' && changePathLength > 1) { // Inline node insertion
+        const insertAtInlineIndex = change.path[1];
+        if (currentPathLength > 1 && posInlineIndex >= insertAtInlineIndex) {
+            newPath[1] += 1;
+        } else if (currentPathLength === 1 && insertAtInlineIndex === 0 && currentOffset > 0) {
+            // Position was at block level (e.g. empty para, offset 0), node inserted at start.
+            // This case is tricky. If currentOffset > 0 for a block-level path, it's ambiguous.
+            // Assume if path is to block, offset is 0. If text is inserted, path should become path to text.
+            // This transformation might better be handled by domToModel after render.
         }
     } else if (change.type === 'formatMark') {
-        // No change for PoC
+      // No path/offset change for this PoC's mark formatting.
     }
     return { path: newPath, offset: currentOffset };
   }
 
+  private _insertModelFragment(fragment: BaseNode[], selection: ModelSelection | null): BaseNode {
+    if (!selection) {
+        console.error("_insertModelFragment: No selection provided for insertion.");
+        return this.currentViewDoc;
+    }
+
+    let insertionPos = selection.anchor; // Simplified: always use anchor for collapsed point
+    let doc = this.currentViewDoc;
+
+    if (selection.anchor.path.join(',') !== selection.head.path.join(',') ||
+        selection.anchor.offset !== selection.head.offset) {
+        // TODO: Implement range deletion first, then insert at collapsed 'from'.
+        // For now, just use the anchor and overwrite/insert.
+        console.warn("_insertModelFragment: Non-collapsed selection deletion not yet implemented, inserting at anchor.");
+        // Potentially, call a hypothetical _deleteRange method here to update doc and insertionPos
+        // For PoC, we proceed with insertionPos = selection.anchor
+    }
+
+    if (!doc.content) { // Should not happen with a valid doc node
+        console.error("_insertModelFragment: Current document has no content array.");
+        return doc;
+    }
+
+    const isBlockFragment = fragment.some(n => (n.type as NodeType).isBlock);
+    const targetBlockPath = insertionPos.path; // Path to the block (or inline node within block)
+
+    if (isBlockFragment) {
+        // --- Block Fragment Insertion ---
+        let currentBlocks = [...doc.content];
+        const insertionBlockIndex = targetBlockPath[0]; // Index of the block where insertion occurs
+
+        if (targetBlockPath.length > 1 && insertionPos.offset > 0) {
+            // Cursor is inside an existing block that needs to be split
+            const blockToSplit = currentBlocks[insertionBlockIndex];
+            const inlineContent = blockToSplit.content || [];
+            const modelInlineNodeIndex = targetBlockPath.length > 1 ? targetBlockPath[1] : (inlineContent.length > 0 ? 0 : -1);
+            const textOffset = insertionPos.offset;
+
+            let partBeforeInline: BaseNode[] = [];
+            let partAfterInline: BaseNode[] = [];
+
+            if (modelInlineNodeIndex !== -1 && (inlineContent[modelInlineNodeIndex]?.type as NodeType)?.isText) {
+                const textNode = inlineContent[modelInlineNodeIndex] as ModelTextNode;
+                for(let i=0; i < modelInlineNodeIndex; i++) partBeforeInline.push(inlineContent[i]);
+                partBeforeInline.push(this.schema.text(textNode.text.slice(0, textOffset), textNode.marks));
+
+                partAfterInline.push(this.schema.text(textNode.text.slice(textOffset), textNode.marks));
+                for(let i=modelInlineNodeIndex + 1; i < inlineContent.length; i++) partAfterInline.push(inlineContent[i]);
+            } else { // Splitting at block boundary or non-text inline node, put all existing content before
+                partBeforeInline = [...inlineContent];
+            }
+
+            const blockBefore = partBeforeInline.length > 0 ?
+                this.schema.node(blockToSplit.type as NodeType, blockToSplit.attrs, this.modelUtils.normalizeInlineArray(partBeforeInline)) : null;
+            const blockAfter = partAfterInline.length > 0 ?
+                this.schema.node(blockToSplit.type as NodeType, {}, this.modelUtils.normalizeInlineArray(partAfterInline)) : null; // New ID for blockAfter
+
+            const newBlocks = [];
+            if (blockBefore) newBlocks.push(blockBefore);
+            newBlocks.push(...fragment);
+            if (blockAfter) newBlocks.push(blockAfter);
+
+            currentBlocks.splice(insertionBlockIndex, 1, ...newBlocks);
+            this.lastAppliedChange = { type: 'paste', path: [insertionBlockIndex], offset: 0, numBlocksInserted: fragment.length };
+
+        } else { // Insert blocks at block boundary (e.g., cursor at start of empty paragraph)
+            currentBlocks.splice(insertionBlockIndex, 0, ...fragment);
+             // If original block at insertionBlockIndex was empty and fragment is inserted before it, it might be removed or shifted.
+            // This simplified splice might need adjustment if replacing an empty placeholder block.
+            this.lastAppliedChange = { type: 'paste', path: [insertionBlockIndex], offset: 0, numBlocksInserted: fragment.length };
+        }
+        return this.schema.node(doc.type as NodeType, doc.attrs, currentBlocks);
+
+    } else {
+        // --- Inline Fragment Insertion ---
+        if (targetBlockPath.length === 0) { // Should not happen if selection is valid
+             console.error("_insertModelFragment: Cannot insert inline content at document root path."); return doc;
+        }
+        const targetBlockIndex = targetBlockPath[0];
+        const targetBlock = doc.content[targetBlockIndex];
+
+        if (!targetBlock || !(targetBlock.type as NodeType).spec.content?.match(/inline|text/i) ) {
+            console.warn("_insertModelFragment: Target block does not accept inline content. Wrapping fragment in a paragraph.");
+            // Attempt to wrap inline fragment in a new paragraph and insert that as a block fragment
+            const newPara = this.schema.node("paragraph", {}, fragment);
+            // This becomes a block insertion. Recurse or duplicate block insertion logic.
+            // For PoC, let's try a simplified block insertion here.
+            const currentBlocks = [...doc.content];
+            currentBlocks.splice(targetBlockIndex + 1, 0, newPara); // Insert after current block
+            this.lastAppliedChange = { type: 'paste', path: [targetBlockIndex + 1], offset: 0, numBlocksInserted: 1 };
+            return this.schema.node(doc.type as NodeType, doc.attrs, currentBlocks);
+        }
+
+        let currentInlineContent = [...(targetBlock.content || [])];
+        // Path: [blockIdx, inlineIdx, (optional) charOffset if deeper in text]
+        // For inline insertion, path[1] is inline node index, offset is char offset in text node.
+        const modelInlineNodeIndex = targetBlockPath.length > 1 ? targetBlockPath[1] : (currentInlineContent.length); // Default to end if path is to block
+        const textOffset = insertionPos.offset;
+
+        let finalInlineContent: BaseNode[] = [];
+        let inserted = false;
+
+        if (currentInlineContent.length === 0) { // Empty block
+            finalInlineContent = fragment;
+            inserted = true;
+        } else {
+            for (let i = 0; i < currentInlineContent.length; i++) {
+                if (i === modelInlineNodeIndex) {
+                    const inlineNode = currentInlineContent[i];
+                    if ((inlineNode.type as NodeType).isText) {
+                        const textNode = inlineNode as ModelTextNode;
+                        finalInlineContent.push(this.schema.text(textNode.text.slice(0, textOffset), textNode.marks));
+                        finalInlineContent.push(...fragment);
+                        finalInlineContent.push(this.schema.text(textNode.text.slice(textOffset), textNode.marks));
+                        inserted = true;
+                    } else { // Atom node or other non-text inline
+                        finalInlineContent.push(inlineNode); // Push the atom/element itself
+                        if (textOffset === 0) { // Insert before atom
+                            finalInlineContent.splice(finalInlineContent.length -1, 0, ...fragment);
+                        } else { // Insert after atom
+                            finalInlineContent.push(...fragment);
+                        }
+                         inserted = true;
+                    }
+                } else {
+                    finalInlineContent.push(currentInlineContent[i]);
+                }
+            }
+        }
+        if (!inserted) { // If loop didn't insert (e.g. modelInlineNodeIndex was at the end)
+            finalInlineContent.push(...fragment);
+        }
+
+        const normalizedContent = this.modelUtils.normalizeInlineArray(finalInlineContent);
+        const updatedBlock = this.schema.node(targetBlock.type as NodeType, targetBlock.attrs, normalizedContent);
+        const newDocContent = [...doc.content];
+        newDocContent[targetBlockIndex] = updatedBlock;
+
+        const inlineContentLength = fragment.reduce((sum, node) => sum + ((node as ModelTextNode).text?.length || 1),0);
+        this.lastAppliedChange = { type: 'paste', path: targetBlockPath, offset: textOffset, inlineContentLength };
+        return this.schema.node(doc.type as NodeType, doc.attrs, newDocContent);
+    }
+}
+
   public updateDocument(newDoc: BaseNode): void {
     let selectionToRestore = this.currentModelSelection;
     if (selectionToRestore && this.lastAppliedChange) {
-        const mappedAnchor = this.mapModelPosition(selectionToRestore.anchor, this.lastAppliedChange);
-        const mappedHead = this.mapModelPosition(selectionToRestore.head, this.lastAppliedChange);
-        selectionToRestore = { anchor: mappedAnchor, head: mappedHead };
+        // For 'paste', selection mapping is more complex.
+        // A simple approach: try to place cursor at the end of pasted content.
+        if (this.lastAppliedChange.type === 'paste') {
+            let newPath = [...this.lastAppliedChange.path];
+            let newOffset = this.lastAppliedChange.offset;
+            if (this.lastAppliedChange.numBlocksInserted && this.lastAppliedChange.numBlocksInserted > 0) {
+                newPath[0] += this.lastAppliedChange.numBlocksInserted -1; // Go to last inserted block
+                // Find last inline node of last inserted block
+                const lastBlock = newDoc.content?.[newPath[0]];
+                if (lastBlock && lastBlock.content && lastBlock.content.length > 0) {
+                    newPath.push(lastBlock.content.length -1);
+                    const lastInline = lastBlock.content[lastBlock.content.length-1];
+                    newOffset = (lastInline.type as NodeType).isText ? (lastInline as ModelTextNode).text.length : 1;
+                } else { newOffset = 0;} // Empty block
+            } else if (this.lastAppliedChange.inlineContentLength) {
+                if (newPath.length > 1) newOffset += this.lastAppliedChange.inlineContentLength;
+                else newPath.push(0); newOffset = this.lastAppliedChange.inlineContentLength; // Needs better path if only block path given
+            }
+             selectionToRestore = { anchor: {path: newPath, offset: newOffset}, head: {path: newPath, offset: newOffset}};
+        } else {
+            const mappedAnchor = this.mapModelPosition(selectionToRestore.anchor, this.lastAppliedChange);
+            const mappedHead = this.mapModelPosition(selectionToRestore.head, this.lastAppliedChange);
+            selectionToRestore = { anchor: mappedAnchor, head: mappedHead };
+        }
     }
     this.lastAppliedChange = null;
     if (this.currentViewDoc && (this.currentViewDoc === newDoc || this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, newDoc))) {
@@ -939,24 +1638,37 @@ export class RitorVDOM {
     this._applyMarkToRange(sel, markType, attrs);
   }
 
-  private _applyMarkToRange(selection: ModelSelection, markType: MarkType, attrs: Attrs | null = {}): void {
-    const fromPos = this._orderPositions(selection.anchor, selection.head)[0];
-    const toPos = this._orderPositions(selection.anchor, selection.head)[1];
+  private _orderPositions(pos1: ModelPosition, pos2: ModelPosition): [ModelPosition, ModelPosition] {
+      for(let i=0; i < Math.min(pos1.path.length, pos2.path.length); i++) {
+          if (pos1.path[i] < pos2.path[i]) return [pos1, pos2];
+          if (pos1.path[i] > pos2.path[i]) return [pos2, pos1];
+      }
+      if (pos1.path.length < pos2.path.length) return [pos1, pos2];
+      if (pos1.path.length > pos2.path.length) return [pos2, pos1];
+      if (pos1.offset < pos2.offset) return [pos1, pos2];
+      return [pos2, pos1];
+  }
 
-    if (fromPos.path[0] !== toPos.path[0] || fromPos.path.length < 2 || toPos.path.length < 2) {
-        console.warn("_applyMarkToRange: PoC only supports single block, single text node selections for now."); return;
+  private _applyMarkToRange(selection: ModelSelection, markType: MarkType, attrs: Attrs | null = {}): void {
+    const [fromPos, toPos] = this._orderPositions(selection.anchor, selection.head);
+
+    if (fromPos.path[0] !== toPos.path[0]) {
+        console.warn("_applyMarkToRange: Multi-block selection not supported for PoC."); return;
     }
     const blockIndex = fromPos.path[0];
     const targetBlock = this.currentViewDoc.content?.[blockIndex];
     if (!targetBlock || !targetBlock.content || !(targetBlock.type as NodeType).allowsMarkType(markType) ) return;
 
     let newInlineContent: BaseNode[] = [];
-    let markAppliedOrRemoved = false;
+    let markAppliedOrRemovedInSelection = false;
 
     let shouldAddMark = true;
     if (attrs === null) {
         shouldAddMark = false;
     } else {
+        // Check if the entire selected range (or first part of it) already has this exact mark.
+        // This is a simplified check focusing on the first node.
+        // A more robust check would see if *all* parts of the selection have the mark.
         const firstNodeIndex = fromPos.path[1];
         const firstNode = targetBlock.content[firstNodeIndex];
         if (firstNode && (firstNode.type as NodeType).isText) {
@@ -971,40 +1683,31 @@ export class RitorVDOM {
     targetBlock.content.forEach((inlineNode, index) => {
       if ((inlineNode.type as NodeType).isText) {
         const textNode = inlineNode as ModelTextNode;
-        // Determine actual start and end for THIS text node based on overall selection
-        let nodeSelStart = 0;
-        let nodeSelEnd = textNode.text.length;
-        let isNodeInSelection = false;
+        const nodeIsFullySelected = (index > fromPos.path[1] && index < toPos.path[1]);
+        const nodeIsPartiallySelected = (index === fromPos.path[1] || index === toPos.path[1]);
 
-        if (index > fromPos.path[1] && index < toPos.path[1]) { // Node fully selected
-            isNodeInSelection = true;
-        } else if (index === fromPos.path[1] && index === toPos.path[1]) { // Selection within this single node
-            nodeSelStart = fromPos.offset;
-            nodeSelEnd = toPos.offset;
-            if (nodeSelStart < nodeSelEnd) isNodeInSelection = true;
-        } else if (index === fromPos.path[1]) { // Start of selection range is in this node
-            nodeSelStart = fromPos.offset;
-            if (nodeSelStart < nodeEndOffset) isNodeInSelection = true;
-        } else if (index === toPos.path[1]) { // End of selection range is in this node
-            nodeSelEnd = toPos.offset;
-            if (nodeSelStart < nodeSelEnd) isNodeInSelection = true;
-        }
+        let startOffset = 0;
+        let endOffset = textNode.text.length;
 
-        if (isNodeInSelection) {
-          if (nodeSelStart > 0) newInlineContent.push(this.schema.text(textNode.text.slice(0, nodeSelStart), textNode.marks));
-          const selectedText = textNode.text.slice(nodeSelStart, nodeSelEnd);
+        if (index === fromPos.path[1]) startOffset = fromPos.offset;
+        if (index === toPos.path[1]) endOffset = toPos.offset;
+
+        if (nodeIsFullySelected || (nodeIsPartiallySelected && startOffset < endOffset) ) {
+          if (startOffset > 0) newInlineContent.push(this.schema.text(textNode.text.slice(0, startOffset), textNode.marks));
+
+          const selectedText = textNode.text.slice(startOffset, endOffset);
           if (selectedText) {
             let currentMarks = textNode.marks || [];
             if (shouldAddMark && attrs !== null) {
-                currentMarks = currentMarks.filter(m => m.type !== markType); // Remove existing of same type first
+                currentMarks = currentMarks.filter(m => m.type !== markType);
                 currentMarks = [...currentMarks, markType.create(attrs)];
-            } else { // Remove mark (attrs is null or shouldAdd is false)
+            } else {
                 currentMarks = currentMarks.filter(m => !(m.type === markType && (attrs === null || JSON.stringify(m.attrs || null) === JSON.stringify(attrs || null))));
             }
             newInlineContent.push(this.schema.text(selectedText, currentMarks));
-            markAppliedOrRemoved = true;
+            markAppliedOrRemovedInSelection = true;
           }
-          if (nodeSelEnd < textNode.text.length) newInlineContent.push(this.schema.text(textNode.text.slice(nodeSelEnd), textNode.marks));
+          if (endOffset < textNode.text.length) newInlineContent.push(this.schema.text(textNode.text.slice(endOffset), textNode.marks));
         } else {
           newInlineContent.push(inlineNode);
         }
@@ -1013,11 +1716,9 @@ export class RitorVDOM {
       }
     });
 
-    if (!markAppliedOrRemoved && !(attrs === null)) { // If we intended to add but nothing changed (e.g. empty selection effectively)
-        console.warn("_applyMarkToRange: No text found in selection to apply mark, or mark already present everywhere.");
-        // If attrs is null (remove), we still proceed to ensure it's removed even if range was empty.
-        // But if no text was processed, nothing to remove from.
-        if(newInlineContent.length === targetBlock.content.length && newInlineContent.every((n,i) => n === targetBlock.content![i])) return;
+    if (!markAppliedOrRemovedInSelection && attrs !== null) {
+        console.warn("_applyMarkToRange: No text found in selection to apply mark.");
+        return;
     }
 
     const normalizedNewInlineContent = this.modelUtils.normalizeInlineArray(newInlineContent);
@@ -1033,17 +1734,28 @@ export class RitorVDOM {
     this.updateDocument(newDoc);
   }
 
-  private _orderPositions(pos1: ModelPosition, pos2: ModelPosition): [ModelPosition, ModelPosition] {
-      // Simplified: assumes paths are comparable by array order and then offset
-      for(let i=0; i < Math.min(pos1.path.length, pos2.path.length); i++) {
-          if (pos1.path[i] < pos2.path[i]) return [pos1, pos2];
-          if (pos1.path[i] > pos2.path[i]) return [pos2, pos1];
+  private _getMarkAttrsInSelection(markType: MarkType): Attrs | null {
+      if (!this.currentModelSelection) return null;
+      const [fromPos, ] = this._orderPositions(this.currentModelSelection.anchor, this.currentModelSelection.head);
+
+      if (fromPos.path.length < 2) return null;
+
+      const block = this.currentViewDoc.content?.[fromPos.path[0]];
+      if (!block || !block.content) return null;
+      // For PoC, check the node at the start of selection.
+      // A more robust version would check if the entire range has the mark, or what's common.
+      const inlineNode = block.content[fromPos.path[1]];
+
+      if (inlineNode && (inlineNode.type as NodeType).isText) {
+          const textNode = inlineNode as ModelTextNode;
+          // Check marks at the character `fromPos.offset`.
+          // If offset is at end of node, it might not have the mark "active".
+          // This needs more robust logic to check marks *covering* the offset.
+          // For now, just check if the node has the mark.
+          const existingMark = (textNode.marks || []).find(m => m.type === markType);
+          return existingMark ? existingMark.attrs : null;
       }
-      if (pos1.path.length < pos2.path.length) return [pos1, pos2];
-      if (pos1.path.length > pos2.path.length) return [pos2, pos1];
-      // Paths are identical, compare offsets
-      if (pos1.offset < pos2.offset) return [pos1, pos2];
-      return [pos2, pos1];
+      return null;
   }
 
   public promptAndSetLink(): void {
@@ -1077,30 +1789,9 @@ export class RitorVDOM {
 
     if (href && href.trim() !== "") {
         this._applyMarkToRange(selection, linkMarkType, { href });
-    } else {
+    } else { // Remove link
         this._applyMarkToRange(selection, linkMarkType, null);
     }
-  }
-
-  private _getMarkAttrsInSelection(markType: MarkType): Attrs | null {
-      if (!this.currentModelSelection) return null;
-      const pos = this._orderPositions(this.currentModelSelection.anchor, this.currentModelSelection.head)[0]; // Use start of selection
-
-      if (pos.path.length < 2) return null; // Needs to be within inline content
-
-      const block = this.currentViewDoc.content?.[pos.path[0]];
-      if (!block || !block.content) return null;
-      const inlineNode = block.content[pos.path[1]];
-
-      if (inlineNode && (inlineNode.type as NodeType).isText) {
-          const textNode = inlineNode as ModelTextNode;
-          // Check marks at the character `pos.offset`.
-          // For simplicity, if the text node *has* the mark, return its attrs.
-          // A more precise check would see if pos.offset is *within* a segment that has the mark.
-          const existingMark = (textNode.marks || []).find(m => m.type === markType);
-          return existingMark ? existingMark.attrs : null;
-      }
-      return null;
   }
 
   public getDocJson(): string {

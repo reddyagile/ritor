@@ -158,12 +158,40 @@ export class NodeType {
     // The concrete types like ParagraphNode, DocNode might become less important,
     // or this create method needs to return those specific types.
     // For now, returning a structure compatible with BaseNode.
-    return {
-      type: this, // Link to NodeType instance
-      attrs: defaultedAttrs,
-      content: finalContent,
-    // marks: this.spec.inline ? _marks : undefined, // Marks are typically for TextNode, but inline nodes can have them.
-    } as unknown as ModelNode; // Cast needed as ModelNode expects NodeType instance for .type
+
+    let calculatedContentSize = 0;
+    if (finalContent) {
+        for (const child of finalContent) {
+            // Child nodes must have their nodeSize defined by this point
+            calculatedContentSize += child.nodeSize;
+        }
+    }
+
+    let calculatedNodeSize: number;
+    if (this.isLeaf || this.spec.atom) { // Leaf nodes like hard_break or image
+        calculatedNodeSize = 1;
+    } else if (this.isBlock || this.spec.group?.includes("block") || this.spec.group?.includes("list_item_block")) { // Block nodes
+        calculatedNodeSize = 2 + calculatedContentSize; // 1 for open tag, 1 for close tag
+    } else if (this.spec.inline) { // Inline, non-atom, with content (e.g. a hypothetical styled span)
+        calculatedNodeSize = calculatedContentSize;
+    } else { // Fallback, should ideally not be reached for well-defined nodes
+        calculatedNodeSize = calculatedContentSize + (finalContent.length > 0 ? 2 : 0);
+    }
+
+    const nodeObject: ModelNode = {
+      type: this,
+      attrs: finalAttrs, // Use finalAttrs which includes ID for blocks
+      content: finalContent.length > 0 ? finalContent : undefined, // Store as undefined if empty
+      // marks: For non-text inline nodes, marks could be passed via _marks
+      nodeSize: calculatedNodeSize,
+    } as unknown as ModelNode; // Initial cast
+
+    if (this.name === this.schema.topNodeType.name) {
+      // This type assertion is a bit unsafe but necessary due to generic ModelNode return type
+      (nodeObject as any).contentSize = calculatedContentSize;
+    }
+
+    return nodeObject;
   }
 
   private defaultAttrs(attrs?: Attrs): Attrs {
@@ -286,7 +314,8 @@ export class Schema {
       type: textNodeType,
       attrs: defaultedAttrs,
       text: text,
-      marks: marks || [],
+      marks: marks || [], // Ensure marks is an array
+      nodeSize: text.length, // Calculate nodeSize for text node
       // content should be undefined for text nodes
     } as unknown as ModelTextNode;
   }

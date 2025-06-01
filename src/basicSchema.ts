@@ -1,52 +1,49 @@
 // src/basicSchema.ts
-import { NodeSpec, MarkSpec, Attrs, DOMOutputSpec } from './schemaSpec.js';
-import { BaseNode, Mark as ModelMark } from './documentModel.js'; // Assuming .js for ESM runtime
+import { NodeSpec, MarkSpec, Attrs, DOMOutputSpec, ParseRule } from './schemaSpec.js'; // Added ParseRule import
+import { BaseNode, Mark as ModelMark } from './documentModel.js';
 
 export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   doc: {
     content: "block+",
-    // Assuming doc node itself might not need an ID in DOM if it's the root $el,
-    // but if it were a nested doc or a different wrapper, it might.
-    // For now, just a class for the main div.
     toDOM: (node: BaseNode): DOMOutputSpec => {
-        // Doc node might also want an ID if we have multiple docs or nested ones later
         const attrs: Attrs = { class: "ritor-document" };
-        if (node.attrs?.id) { // If doc nodes were to have IDs
+        if (node.attrs?.id) {
             attrs.id = node.attrs.id;
         }
         return ["div", attrs, 0];
     },
+    // No parseDOM for doc, it's the root.
   },
   paragraph: {
     content: "inline*",
     group: "block",
-    attrs: { id: {} }, // Declare id as a possible attribute
+    attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => {
       const attrs: Attrs = {};
       if (node.attrs?.id) {
         attrs.id = node.attrs.id;
       }
-      // Add other paragraph-specific attributes from node.attrs if any
-      // For example, if paragraphs could have classes: attrs.class = node.attrs.class || "";
       return ["p", attrs, 0];
     },
+    parseDOM: [{ tag: "p" }]
   },
   text: {
     group: "inline",
-    inline: true, // Explicitly inline
-    // No toDOM for text nodes, handled by parent.
-    // No content spec for text nodes, they are atomic regarding content.
+    inline: true,
+    // No toDOM for text nodes, handled by parent/serializer.
+    // No parseDOM for text nodes, DOMParser handles TEXT_NODE directly.
   },
   hard_break: {
     inline: true,
-    atom: true, // Leaf node
+    atom: true,
     group: "inline",
     toDOM: (_node: BaseNode): DOMOutputSpec => ["br"],
+    parseDOM: [{ tag: "br" }]
   },
   heading: {
     attrs: {
         level: { default: 1 },
-        id: {} // Headings should also have IDs for keyed diffing
+        id: {}
     },
     content: "inline*",
     group: "block",
@@ -56,27 +53,28 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
         if (node.attrs?.id) {
             attrs.id = node.attrs.id;
         }
-        // Add other heading-specific attributes from node.attrs if any
         return [`h${node.attrs?.level || 1}`, attrs, 0];
     },
     parseDOM: [
-        { tag: "h1", attrs: { level: 1 } },
-        { tag: "h2", attrs: { level: 2 } },
-        { tag: "h3", attrs: { level: 3 } },
-        // H4-H6 omitted for brevity but would follow the pattern
+        { tag: "h1", getAttrs: (_domNode) => ({level: 1}) }, // getAttrs now consistent
+        { tag: "h2", getAttrs: (_domNode) => ({level: 2}) },
+        { tag: "h3", getAttrs: (_domNode) => ({level: 3}) },
+        { tag: "h4", getAttrs: (_domNode) => ({level: 4}) },
+        { tag: "h5", getAttrs: (_domNode) => ({level: 5}) },
+        { tag: "h6", getAttrs: (_domNode) => ({level: 6}) },
     ],
   },
   list_item: {
-    content: "paragraph+", // Each list item contains one or more paragraphs
-    group: "list_item_block", // A distinct group for list items to be contained by lists
-    defining: true, // Important for joining behavior: you can't easily join two list items by backspace
+    content: "paragraph+",
+    group: "list_item_block",
+    defining: true,
     attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => ["li", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "li" }],
   },
   bullet_list: {
-    content: "list_item+", // Must contain one or more list items
-    group: "block", // Lists are top-level blocks
+    content: "list_item+",
+    group: "block",
     attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => ["ul", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "ul" }],
@@ -97,17 +95,18 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     },
     parseDOM: [{
         tag: "ol",
-        getAttrs: (dom: unknown) => {
-            const htmlElement = dom as HTMLElement; // Type assertion
+        getAttrs: (domNode: globalThis.Node | string) => { // Changed dom to domNode
+            const htmlElement = domNode as HTMLElement;
             const start = htmlElement.getAttribute("start");
             return {
                 order: start ? parseInt(start, 10) : 1,
+                // id will be handled by default if not specified by getAttrs
             };
         },
     }],
   },
   blockquote: {
-    content: "block+", // Allows one or more block elements (e.g. paragraphs)
+    content: "block+",
     group: "block",
     defining: true,
     attrs: { id: {} },
@@ -123,32 +122,36 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
         {tag: "strong"},
         {tag: "b"},
         {style: "font-weight=bold"},
-        {style: "font-weight=700"}, // Common bold weight
-        {style: "font-weight=600"}  // Sometimes used for bold
+        {style: "font-weight=700"}, // Order matters, more specific might go first if needed
+        {style: "font-weight=600"}
     ]
   },
   italic: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["em", 0],
-    parseDOM: [{tag: "i"}, {tag: "em"}, {style: "font-style=italic"}]
+    parseDOM: [
+        {tag: "i"},
+        {tag: "em"},
+        {style: "font-style=italic"}
+    ]
   },
   strikethrough: {
+    toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["s", 0],
     parseDOM: [
         { tag: "s" },
         { tag: "del" },
         { tag: "strike" },
-        { style: "text-decoration=line-through" }, // CSS 2.1
-        { style: "text-decoration-line=line-through" } // CSS 3
-    ],
-    toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["s", 0]
+        { style: "text-decoration=line-through" },
+        { style: "text-decoration-line=line-through" } // More modern CSS property
+    ]
   },
   link: {
     attrs: {
-        href: { default: "" },
+        href: { default: "" }, // Ensure href is always present
         title: { default: null }
     },
     inclusive: false,
     toDOM: (mark: ModelMark, _inline: boolean): DOMOutputSpec => {
-        const markAttrs = mark.attrs as { href: string, title?: string }; // Type assertion
+        const markAttrs = mark.attrs as { href: string, title?: string };
         const domAttrs: Attrs = { href: markAttrs.href };
         if (markAttrs.title) {
             domAttrs.title = markAttrs.title;
@@ -156,12 +159,14 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
         return ["a", domAttrs, 0];
     },
     parseDOM: [{
-        tag: "a[href]",
-        getAttrs: (dom: unknown) => {
-            const htmlElement = dom as HTMLElement; // Type assertion
+        tag: "a", // Simpler tag, check for href in getAttrs
+        getAttrs: (domNodeOrValue: globalThis.Node | string) => {
+            const dom = domNodeOrValue as HTMLAnchorElement;
+            const href = dom.getAttribute("href");
+            if (!href) return false; // Don't match if 'a' tag has no href
             return {
-                href: htmlElement.getAttribute("href"),
-                title: htmlElement.getAttribute("title")
+                href: href,
+                title: dom.getAttribute("title") || null // Ensure title is null if not present
             };
         }
     }]

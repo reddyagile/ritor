@@ -36,6 +36,7 @@ export interface BaseNode {
   readonly content?: ReadonlyArray<BaseNode>; // Content is always BaseNode array
   readonly marks?: ReadonlyArray<AnyMark>; // Marks for inline content, esp. TextNode
   // id?: string; // This was considered but ID should be part of attrs for schema consistency
+  readonly nodeSize: number; // Calculated size of the node
 }
 
 // TextNode now also uses NodeType
@@ -59,6 +60,7 @@ export type BlockNode = BaseNode;  // Generic BaseNode can represent block nodes
 export interface DocNode extends BaseNode {
   readonly type: NodeType & { name: 'doc' };
   readonly content: ReadonlyArray<BlockNode>;
+  readonly contentSize: number; // Sum of nodeSize of content nodes
 }
 
 

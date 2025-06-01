@@ -15,16 +15,23 @@ export type Attrs = { [key: string]: any } | null;
 export type DOMOutputSpec = [string, Attrs | 0, ...any[]] | [string, ...any[]] | string;
 
 // Simplified ParseRule for now
-export type ParseRule = {
-  tag?: string; // e.g., "p", "strong", "a[href]"
-  style?: string; // e.g., "font-weight=bold"
-  // A function to get attributes from the DOM node.
-  // Returns 'false' to indicate this rule doesn't match,
-  // 'null' or 'undefined' for no attributes, or an Attrs object.
-  getAttrs?: (domNode: globalThis.Node | string) => Attrs | false | null | undefined;
-  // contentElement?: string | ((domNode: globalThis.Node) => globalThis.Node); // For getting content from a specific child
-  // Other properties like 'priority', 'skip', 'preserveWhitespace' can be added later.
-} | any; // Allow 'any' for now to maintain compatibility with previous 'any' type.
+
+// Forward declare DOMParser for ParseRule.getContent
+// We have to use 'any' here because DOMParser class is in a different file and imports this one.
+// This creates a circular dependency if we try to import DOMParser type directly.
+export type DOMParser = any;
+
+export interface ParseRule {
+  tag?: string; // e.g., "p", "li", "a[href]" (simple tags first, then selectors)
+  style?: string; // e.g., "font-weight=bold" (key=value)
+  // priority?: number;
+  getAttrs?: (domNodeOrValue: HTMLElement | string) => Attrs | false | null | undefined;
+  getContent?: (domNode: HTMLElement, parser: DOMParser) => import('./documentModel.js').BaseNode[]; // Allow custom content parsing
+  // context?: string;
+  // Other conditions like node name, class, etc. could be added
+}
+// Removed the "| any" from ParseRule to make it more specific.
+// Ensure dependent files are updated if they relied on 'any'.
 
 
 export interface AttributeSpec {

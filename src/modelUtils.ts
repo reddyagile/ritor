@@ -76,6 +76,21 @@ export class ModelUtils {
 
     return result;
   }
+
+    public isBlockEffectivelyEmpty(node: BaseNode): boolean {
+        if (!node.content || node.content.length === 0) {
+            return true;
+        }
+        if (node.content.length === 1) {
+            const firstChild = node.content[0];
+            if ((firstChild.type as NodeType).isText && !(firstChild as TextNode).text) { // Empty text node
+                return true;
+            }
+            // Optional: consider a single <br> as effectively empty for replacement purposes
+            // if (firstChild.type.name === 'hard_break') return true;
+        }
+        return false;
+    }
 }
 
 console.log("modelUtils.ts defined with ModelUtils class and normalizeInlineArray method.");
