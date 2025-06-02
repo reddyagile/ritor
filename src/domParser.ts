@@ -2,11 +2,10 @@
 
 import { Schema, NodeType } from './schema.js';
 import { ParseRule, DOMParserInstance } from './schemaSpec.js';
-import { DocNode, BaseNode, TextNode, Mark } from './documentModel.js'; // Removed marksEq, normalizeMarks from here
-import { marksEq, normalizeMarks } from './modelUtils.js'; // Import from modelUtils
+import { DocNode, BaseNode, TextNode, Mark, marksEq, normalizeMarks } from './documentModel.js';
+import { Slice } from './transform/slice.js'; // For Slice.empty, though not used here directly
 
-// const DEBUG_PARSE_NODE = true; // FORCED DEBUGGING
-const DEBUG_PARSE_NODE = (globalThis as any).DEBUG_MATCHES_RULE || false; // Share flag
+const DEBUG_PARSE_NODE = (globalThis as any).DEBUG_MATCHES_RULE || false;
 
 export class DOMParser {
     private schema: Schema;
@@ -16,48 +15,102 @@ export class DOMParser {
     }
 
     public parse(dom: HTMLElement | DocumentFragment): DocNode {
-        const content: BaseNode[] = [];
-        const children = dom.childNodes;
-        const docType = this.schema.topNodeType;
-        for (let i = 0; i < children.length; i++) {
-            const parsedResult = this.parseNode(children[i] as ChildNode, [], docType);
-            if (parsedResult) {
-                const nodesToAdd = Array.isArray(parsedResult) ? parsedResult : [parsedResult];
-                for (const node of nodesToAdd) {
-                    // Ensure direct children of doc are block nodes or significant text (for PoC)
-                    if (node.type.isBlock ||
-                        (node.isText && !node.isLeaf && (node as TextNode).text.trim() !== '')) {
-                        content.push(node);
-                    } else if (node.isText && !node.isLeaf && (node as TextNode).text.trim() === '') { /* Skip empty text */ }
-                    else { console.warn(`DOMParser.parse: Node of type '${node.type.name}' (group: ${node.type.spec.group}) is not a block node and was ignored at document root.`); }
-                }
-            }
-        }
-        if (!docType.checkContent(content)) {
+        const parsedResult = this.parseFragment(dom, this.schema.topNodeType);
+        const content = parsedResult.nodes; // openStart/End are ignored for full doc parse
+
+        if (!this.schema.topNodeType.checkContent(content)) {
             console.warn(
                 `Schema validation failed for content of root DOC node.`,
-                "\nExpected content expression:", docType.contentExpressionString,
+                "\nExpected content expression:", this.schema.topNodeType.contentExpressionString,
                 "\nParsed content (model nodes):", content.map(n => n.type.name)
             );
         }
-        return this.schema.node(docType, null, content) as DocNode;
+        return this.schema.node(this.schema.topNodeType, null, content) as DocNode;
     }
 
-    public parseFragment(domFragmentRoot: HTMLElement | DocumentFragment, parentModelType?: NodeType): BaseNode[] {
-        const content: BaseNode[] = [];
+    public parseFragment(
+        domFragmentRoot: HTMLElement | DocumentFragment,
+        parentModelType?: NodeType // Context for parsing fragment children
+    ): { nodes: BaseNode[], openStart: number, openEnd: number } {
+        const nodes: BaseNode[] = [];
         const children = domFragmentRoot.childNodes;
         const contextType = parentModelType || this.schema.topNodeType;
+
         for (let i = 0; i < children.length; i++) {
             const parsedResult = this.parseNode(children[i] as ChildNode, [], contextType);
             if (parsedResult) {
-                if (Array.isArray(parsedResult)) content.push(...parsedResult);
-                else content.push(parsedResult);
+                if (Array.isArray(parsedResult)) nodes.push(...parsedResult);
+                else nodes.push(parsedResult);
             }
         }
-        return content;
+
+        let openStart = 0;
+        let openEnd = 0;
+
+        // Heuristic for openStart
+        if (children.length > 0) {
+            let firstSignificantChild: ChildNode | null = null;
+            for(let i=0; i < children.length; i++) {
+                if(children[i].nodeType === Node.TEXT_NODE && (children[i].nodeValue || "").trim() !== "") { firstSignificantChild = children[i]; break; }
+                if(children[i].nodeType === Node.ELEMENT_NODE) { firstSignificantChild = children[i]; break; }
+            }
+
+            if (firstSignificantChild) {
+                if (firstSignificantChild.nodeType === Node.TEXT_NODE) { // Raw text implies open start
+                    openStart = 1;
+                } else if (firstSignificantChild.nodeType === Node.ELEMENT_NODE) {
+                    const firstElName = (firstSignificantChild as HTMLElement).nodeName.toLowerCase();
+                    // If first element is a known mark tag or a generic inline wrapper, or a schema-defined inline node (that isn't also block)
+                    if (this.schema.marks[firstElName] ||
+                        ['span', 'strong', 'em', 'b', 'i', 's', 'u', 'a', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(firstElName) ||
+                        (this.schema.nodes[firstElName] && this.schema.nodes[firstElName].isInline && !this.schema.nodes[firstElName].isBlock)
+                    ) {
+                        openStart = 1;
+                    }
+                }
+            }
+        }
+
+        // Heuristic for openEnd
+        if (children.length > 0) {
+            let lastSignificantChild: ChildNode | null = null;
+            for(let i=children.length-1; i >= 0; i--) {
+                if(children[i].nodeType === Node.TEXT_NODE && (children[i].nodeValue || "").trim() !== "") { lastSignificantChild = children[i]; break; }
+                if(children[i].nodeType === Node.ELEMENT_NODE) { lastSignificantChild = children[i]; break; }
+            }
+            if (lastSignificantChild) {
+                if (lastSignificantChild.nodeType === Node.TEXT_NODE) { // Raw text implies open end
+                    openEnd = 1;
+                } else if (lastSignificantChild.nodeType === Node.ELEMENT_NODE) {
+                    const lastElName = (lastSignificantChild as HTMLElement).nodeName.toLowerCase();
+                    if (this.schema.marks[lastElName] ||
+                        ['span', 'strong', 'em', 'b', 'i', 's', 'u', 'a', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(lastElName) ||
+                        (this.schema.nodes[lastElName] && this.schema.nodes[lastElName].isInline && !this.schema.nodes[lastElName].isBlock)
+                    ) {
+                        openEnd = 1;
+                    }
+                }
+            }
+        }
+
+        // If the fragment consists of only inline nodes (or text nodes), it's likely open on both sides.
+        // However, if it's a single block node (e.g. pasting just a paragraph), it's closed.
+        if (nodes.length > 0 && nodes.every(n => n.isText || (n.type.isInline && !n.type.isBlock))) {
+            // This is already covered by individual first/last child checks.
+            // If it's all inline, openStart and openEnd would likely both be 1.
+        } else if (nodes.length === 1 && nodes[0].type.isBlock) {
+            // If the entire fragment is a single block node, it's considered "closed" at its own boundaries.
+            // The internal content of this block might be open, but that's not what slice.openStart/End means here.
+            openStart = 0;
+            openEnd = 0;
+        }
+        // If nodes is empty, openStart/End remain 0.
+
+        return { nodes, openStart, openEnd };
     }
 
     private parseNode(domNode: ChildNode, activeMarks: Mark[] = [], parentModelType?: NodeType): BaseNode | BaseNode[] | null {
+        // ... (rest of parseNode method from previous correct version)
         if (domNode.nodeType === Node.TEXT_NODE) {
             const text = domNode.nodeValue || "";
             if (text.trim() === '' && activeMarks.length === 0) return null;
@@ -123,9 +176,6 @@ export class DOMParser {
         }
 
         if (marksFromThisElement.length > 0 && activeMarks.length === marksFromThisElement.reduce((l,m)=> l + (activeMarks.find(am => am.eq(m))?1:0) ,0) ) {
-             // If this element *only* added marks (all its marks were new compared to activeMarks)
-             // and it didn't match a node type itself, return its children (which now have the marks).
-             // This check is simplified: if this element itself contributed any marks.
              if (DEBUG_PARSE_NODE) console.log(`[PARSE_NODE_TRACE] Fallback: Element ${elementName} was unknown as a node, but contributed marks. Returning its parsed children [${childrenContent.map(c=>c.type.name).join(', ')}].`);
             return childrenContent.length > 0 ? childrenContent : null;
         }
@@ -155,7 +205,7 @@ export class DOMParser {
         return normalizeMarks(marks);
     }
 
-    public matchesRule(element: HTMLElement, rule: ParseRule, elementName?: string, parentModelType?: NodeType): boolean { /* ... as before ... */
+    public matchesRule(element: HTMLElement, rule: ParseRule, elementName?: string, parentModelType?: NodeType): boolean {
         const elName = elementName || element.nodeName.toLowerCase();
         let tagConditionsMet = false; let styleConditionsMet = false; let contextCondMet = true; let baseTagNameForRule = "";
         const ruleIsRelevantForDebug = DEBUG_PARSE_NODE && (rule.tag === "p.special" || (rule.tag === "p" && elName === "p") || rule.tag?.includes("h"));
@@ -200,4 +250,4 @@ export class DOMParser {
     }
 }
 
-console.log("domParser.ts: Refactored parseNode to handle array returns for mark wrappers and updated callers.");
+console.log("domParser.ts: parseFragment returns {nodes, openStart, openEnd}; parse uses it.");
