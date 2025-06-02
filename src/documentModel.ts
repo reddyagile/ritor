@@ -1,6 +1,9 @@
 // src/documentModel.ts
-import type { NodeType, MarkType } from './schema.js'; // Use type import for circular dependency avoidance if necessary at runtime
+import { NodeType, MarkType } from './schema.js'; // Changed from import type
 import type { Attrs } from './schemaSpec.js'; // Attrs type
+
+// Re-export for other modules if they import from documentModel
+export { NodeType, MarkType };
 
 // Base Mark Interface - now links to MarkType
 export interface Mark {

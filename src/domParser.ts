@@ -2,7 +2,8 @@
 
 import { Schema, NodeType } from './schema.js'; 
 import { ParseRule, DOMParserInstance } from './schemaSpec.js'; 
-import { DocNode, BaseNode, TextNode, Mark, marksEq, normalizeMarks } from './documentModel.js';
+import { DocNode, BaseNode, TextNode, Mark } from './documentModel.js';
+import { marksEq, normalizeMarks } from './modelUtils.js';
 import { Slice } from './transform/slice.js'; // For Slice.empty, though not used here directly
 
 const DEBUG_PARSE_NODE = (globalThis as any).DEBUG_MATCHES_RULE || false;
@@ -44,69 +45,90 @@ export class DOMParser {
             }
         }
 
-        let openStart = 0;
-        let openEnd = 0;
-
-        // Heuristic for openStart
-        if (children.length > 0) {
-            let firstSignificantChild: ChildNode | null = null;
-            for(let i=0; i < children.length; i++) {
-                if(children[i].nodeType === Node.TEXT_NODE && (children[i].nodeValue || "").trim() !== "") { firstSignificantChild = children[i]; break; }
-                if(children[i].nodeType === Node.ELEMENT_NODE) { firstSignificantChild = children[i]; break; }
-            }
-
-            if (firstSignificantChild) {
-                if (firstSignificantChild.nodeType === Node.TEXT_NODE) { // Raw text implies open start
-                    openStart = 1;
-                } else if (firstSignificantChild.nodeType === Node.ELEMENT_NODE) {
-                    const firstElName = (firstSignificantChild as HTMLElement).nodeName.toLowerCase();
-                    // If first element is a known mark tag or a generic inline wrapper, or a schema-defined inline node (that isn't also block)
-                    if (this.schema.marks[firstElName] ||
-                        ['span', 'strong', 'em', 'b', 'i', 's', 'u', 'a', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(firstElName) ||
-                        (this.schema.nodes[firstElName] && this.schema.nodes[firstElName].isInline && !this.schema.nodes[firstElName].isBlock)
-                    ) {
-                        openStart = 1;
-                    }
-                }
-            }
+        let firstDomChild: globalThis.Node | null = domFragmentRoot.firstChild;
+        while(firstDomChild && (firstDomChild.nodeType === Node.COMMENT_NODE || (firstDomChild.nodeType === Node.TEXT_NODE && !/\S/.test(firstDomChild.textContent!)))) {
+            firstDomChild = firstDomChild.nextSibling;
         }
 
-        // Heuristic for openEnd
-        if (children.length > 0) {
-            let lastSignificantChild: ChildNode | null = null;
-            for(let i=children.length-1; i >= 0; i--) {
-                if(children[i].nodeType === Node.TEXT_NODE && (children[i].nodeValue || "").trim() !== "") { lastSignificantChild = children[i]; break; }
-                if(children[i].nodeType === Node.ELEMENT_NODE) { lastSignificantChild = children[i]; break; }
-            }
-            if (lastSignificantChild) {
-                if (lastSignificantChild.nodeType === Node.TEXT_NODE) { // Raw text implies open end
-                    openEnd = 1;
-                } else if (lastSignificantChild.nodeType === Node.ELEMENT_NODE) {
-                    const lastElName = (lastSignificantChild as HTMLElement).nodeName.toLowerCase();
-                    if (this.schema.marks[lastElName] ||
-                        ['span', 'strong', 'em', 'b', 'i', 's', 'u', 'a', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(lastElName) ||
-                        (this.schema.nodes[lastElName] && this.schema.nodes[lastElName].isInline && !this.schema.nodes[lastElName].isBlock)
-                    ) {
-                        openEnd = 1;
-                    }
-                }
-            }
+        let lastDomChild: globalThis.Node | null = domFragmentRoot.lastChild;
+        while(lastDomChild && (lastDomChild.nodeType === Node.COMMENT_NODE || (lastDomChild.nodeType === Node.TEXT_NODE && !/\S/.test(lastDomChild.textContent!)))) {
+            lastDomChild = lastDomChild.previousSibling;
         }
         
-        // If the fragment consists of only inline nodes (or text nodes), it's likely open on both sides.
-        // However, if it's a single block node (e.g. pasting just a paragraph), it's closed.
-        if (nodes.length > 0 && nodes.every(n => n.isText || (n.type.isInline && !n.type.isBlock))) {
-            // This is already covered by individual first/last child checks.
-            // If it's all inline, openStart and openEnd would likely both be 1.
-        } else if (nodes.length === 1 && nodes[0].type.isBlock) {
-            // If the entire fragment is a single block node, it's considered "closed" at its own boundaries.
-            // The internal content of this block might be open, but that's not what slice.openStart/End means here.
-            openStart = 0;
-            openEnd = 0;
-        }
-        // If nodes is empty, openStart/End remain 0.
+        const rawOpenStartDepth = this._calculateOpenDepth(firstDomChild, this.schema, true);
+        const openStart = this._calculateOpenDepth(firstDomChild, this.schema, true);
+        const openEnd = this._calculateOpenDepth(lastDomChild, this.schema, false);
 
         return { nodes, openStart, openEnd };
+    }
+
+    private _getNodeTypeForTag(tagName: string, schema: Schema): NodeType | null {
+        for (const nodeTypeName in schema.nodes) {
+            const nodeType = schema.nodes[nodeTypeName];
+            if (nodeType.spec.parseDOM) {
+                for (const rule of nodeType.spec.parseDOM) {
+                    let baseTagNameForRule = rule.tag || "";
+                    // This is a simplified version of matchesRule's tag parsing logic
+                    if (baseTagNameForRule.includes('[')) baseTagNameForRule = baseTagNameForRule.substring(0, baseTagNameForRule.indexOf('['));
+                    if (baseTagNameForRule.includes('.')) baseTagNameForRule = baseTagNameForRule.substring(0, baseTagNameForRule.indexOf('.'));
+                    
+                    if (baseTagNameForRule === tagName) {
+                        return nodeType;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    private _calculateOpenDepth(domNode: globalThis.Node | null, schema: Schema, isStart: boolean): number {
+        // Removed one-time schema log, it was for diagnosing the schema object itself.
+        const nodeNameForLog = domNode ? (domNode as any).nodeName : 'null';
+        if (!domNode) {
+            return 0;
+        }
+
+        if (domNode.nodeType === Node.TEXT_NODE) {
+            const hasContent = /\S/.test(domNode.textContent || "");
+            return hasContent ? 1 : 0;
+        }
+
+        if (domNode.nodeType === Node.ELEMENT_NODE) {
+            const element = domNode as HTMLElement;
+            const elementName = element.nodeName.toLowerCase();
+            
+            const actualNodeType = this._getNodeTypeForTag(elementName, schema); // Use helper
+
+            // Check if it's a mark tag first (marks don't have NodeTypes but are inline)
+            // schema.marks is keyed by mark name (e.g. "strong"), which might match tag name.
+            if (schema.marks[elementName] && !(actualNodeType && actualNodeType.isBlock) ) { 
+                return 1;
+            }
+
+            if (actualNodeType) {
+                if (actualNodeType.isInline && !actualNodeType.isBlock) return 1; // Explicitly inline node type
+                if (actualNodeType.isBlock) { // Block node type
+                    const nextChild = isStart ? element.firstChild : element.lastChild;
+                    let childNodeToRecurse: globalThis.Node | null = nextChild;
+                    while(childNodeToRecurse && (childNodeToRecurse.nodeType === Node.COMMENT_NODE || (childNodeToRecurse.nodeType === Node.TEXT_NODE && !/\S/.test(childNodeToRecurse.textContent!)))) {
+                        childNodeToRecurse = isStart ? childNodeToRecurse.nextSibling : childNodeToRecurse.previousSibling;
+                    }
+                    const childDepth = this._calculateOpenDepth(childNodeToRecurse, schema, isStart);
+                    return 1 + childDepth;
+                }
+            }
+            
+            // Fallback for generic HTML inline tags not explicitly defined in schema nodes or marks
+            if (['strong', 'em', 'b', 'i', 's', 'u', 'a', 'span', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(elementName)) {
+                // Ensure this isn't a block node that happens to use a common inline tag (e.g. schema defines 'a' as a block)
+                if (!actualNodeType || !actualNodeType.isBlock) {
+                    return 1; 
+                }
+            }
+            
+            return 0; 
+        }
+        return 0; 
     }
 
     private parseNode(domNode: ChildNode, activeMarks: Mark[] = [], parentModelType?: NodeType): BaseNode | BaseNode[] | null {

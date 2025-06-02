@@ -210,22 +210,90 @@ export class RitorVDOM {
     }
   }
 
-  private applyChange(change: SimpleChange): void { 
-    if (!this.currentModelSelection) return;
-    const tr = new Transaction(this.currentViewDoc, this.currentModelSelection);
-    const flatAnchor = modelPositionToFlatOffset(this.currentViewDoc, this.currentModelSelection.anchor, this.schema); const flatHead = this.arePositionsEqual(this.currentModelSelection.anchor, this.currentModelSelection.head) ? flatAnchor : modelPositionToFlatOffset(this.currentViewDoc, this.currentModelSelection.head, this.schema); const from = Math.min(flatAnchor, flatHead); const to = Math.max(flatAnchor, flatHead);
-    let newSelectionAnchorPos: ModelPosition | null = null; let newSelectionHeadPos: ModelPosition | null = null;
-    switch (change.type) {
-      case 'insertText': if (change.text) { const marks = this.getMarksAtPosition(this.currentViewDoc, this.currentModelSelection.anchor); const textNode = this.schema.text(change.text, marks); tr.replace(from, to, Slice.fromFragment([textNode])); const newFlatPos = from + textNode.text.length; newSelectionAnchorPos = newSelectionHeadPos = flatOffsetToModelPosition(tr.doc, newFlatPos, this.schema); } break;
-      case 'deleteContentBackward': if (from === to && from > 0) { tr.delete(from -1, from); newSelectionAnchorPos = newSelectionHeadPos = flatOffsetToModelPosition(tr.doc, from -1, this.schema); } else if (from < to) { tr.delete(from, to); newSelectionAnchorPos = newSelectionHeadPos = flatOffsetToModelPosition(tr.doc, from, this.schema); } break;
-      case 'insertParagraph': const newPara = this.schema.node(this.schema.nodes.paragraph, {}, [this.schema.text('')]); tr.replace(from, to, Slice.fromFragment([newPara])); const newParaStartFlatPos = from + 1; newSelectionAnchorPos = newSelectionHeadPos = flatOffsetToModelPosition(tr.doc, newParaStartFlatPos, this.schema); break;
-      default: return;
+  private applyChange(change: SimpleChange): void {
+    this.updateModelSelectionState(); // Ensure currentModelSelection is fresh
+    const selection = this.currentModelSelection;
+    if (!selection) {
+      console.warn("applyChange called without a currentModelSelection.");
+      return;
     }
-    if (newSelectionAnchorPos && newSelectionHeadPos) tr.setSelection({ anchor: newSelectionAnchorPos, head: newSelectionHeadPos });
-    if (tr.stepsApplied) { this.undoManager.add(this.currentViewDoc); this.updateDocument(tr); }
+
+    const doc = this.currentViewDoc;
+    const schema = this.schema;
+    const tr = new Transaction(doc, selection, schema);
+    const flatAnchor = modelPositionToFlatOffset(doc, selection.anchor, schema);
+    const flatHead = modelPositionToFlatOffset(doc, selection.head, schema);
+
+    let newCursorPos: ModelPosition | null = null;
+
+    switch (change.type) {
+      case 'insertText':
+        if (change.text) {
+          const from = Math.min(flatAnchor, flatHead);
+          const to = Math.max(flatAnchor, flatHead);
+          const marks = this.getMarksAtPosition(doc, selection.anchor);
+          const textNode = schema.text(change.text, marks);
+          tr.replace(from, to, Slice.fromFragment([textNode]));
+          const newFlatPos = from + textNode.text.length;
+          newCursorPos = flatOffsetToModelPosition(tr.doc, newFlatPos, schema);
+          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        }
+        break;
+      
+      case 'deleteContentBackward':
+        if (flatAnchor !== flatHead) { // Non-collapsed selection
+          const from = Math.min(flatAnchor, flatHead);
+          const to = Math.max(flatAnchor, flatHead);
+          tr.delete(from, to);
+          newCursorPos = flatOffsetToModelPosition(tr.doc, from, schema);
+          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        } else { // Collapsed selection
+          if (flatAnchor === 0) return; // Cannot delete before start of doc
+          tr.delete(flatAnchor - 1, flatAnchor);
+          newCursorPos = flatOffsetToModelPosition(tr.doc, flatAnchor - 1, schema);
+          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        }
+        break;
+
+      case 'deleteContentForward':
+        if (flatAnchor !== flatHead) { // Non-collapsed selection
+          const from = Math.min(flatAnchor, flatHead);
+          const to = Math.max(flatAnchor, flatHead);
+          tr.delete(from, to);
+          newCursorPos = flatOffsetToModelPosition(tr.doc, from, schema);
+          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        } else { // Collapsed selection
+          if (flatAnchor === doc.contentSize) return; // Cannot delete after end of doc content
+          tr.delete(flatAnchor, flatAnchor + 1);
+          newCursorPos = flatOffsetToModelPosition(tr.doc, flatAnchor, schema);
+          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        }
+        break;
+
+      case 'insertParagraph':
+        const fromIP = Math.min(flatAnchor, flatHead);
+        const toIP = Math.max(flatAnchor, flatHead);
+        const newPara = schema.node(schema.nodes.paragraph, {}, [schema.text('')]);
+        tr.replace(fromIP, toIP, Slice.fromFragment([newPara]));
+        const newParaStartFlatPos = fromIP + 1; // After the opening tag of the new paragraph
+        newCursorPos = flatOffsetToModelPosition(tr.doc, newParaStartFlatPos, schema);
+        if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+        break;
+        
+      default:
+        return;
+    }
+
+    tr.scrollIntoView(); // May need to be conditional or smarter
+    if (tr.stepsApplied) {
+      if (!this.domPatcher.areNodesEffectivelyEqual(this.currentViewDoc, tr.doc)) { // Check if document actually changed
+          this.undoManager.add(this.currentViewDoc);
+      }
+      this.updateDocument(tr);
+    }
   }
 
-  public updateDocument(trOrDoc: Transaction | DocNode): void { 
+  public updateDocument(trOrDoc: Transaction | DocNode): void {
     this.isProcessingMutations = true; let selToApply: ModelSelection|null=null;
     if(trOrDoc instanceof Transaction){this.currentViewDoc=trOrDoc.doc; selToApply=trOrDoc.selection;}
     else{this.currentViewDoc=trOrDoc; if(this.currentModelSelection){const dS=window.getSelection(); if(dS&&dS.rangeCount>0)selToApply=this.domToModelSelection(dS.getRangeAt(0)); if(!selToApply){const fTI=this.findFirstTextNodePath(this.currentViewDoc); selToApply=fTI?{anchor:{path:fTI.path,offset:0},head:{path:fTI.path,offset:0}}:{anchor:{path:[],offset:0},head:{path:[],offset:0}};}}}

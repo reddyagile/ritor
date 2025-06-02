@@ -4,7 +4,7 @@ import { DocNode, TextNode, Mark, BaseNode } from '../documentModel.js';
 import { Schema } from '../schema.js';
 import { Step, StepResult } from './step.js';
 import { StepMap } from './stepMap.js';
-import { findTextNodesInRange, replaceNodeInPathWithMany, normalizeMarks } from '../modelUtils.js';
+import { findTextNodesInRange, replaceNodeInPathWithMany, normalizeMarks, marksEq } from '../modelUtils.js'; // Added marksEq
 import { RemoveMarkStep } from './removeMarkStep.js';
 
 export class AddMarkStep implements Step {
@@ -54,7 +54,7 @@ export class AddMarkStep implements Step {
                 newMarks.push(this.mark); 
                 newMarks = normalizeMarks(newMarks); // Ensure sorted, no duplicates
                 nodesToInsert.push(schema.text(markedTextContent, newMarks));
-            } else if (startOffsetInNode === 0 && endOffsetInNode === 0 && text.length === 0 && originalTextNode.marks.length === 0) {
+            } else if (startOffsetInNode === 0 && endOffsetInNode === 0 && text.length === 0 && (originalTextNode.marks || []).length === 0) { 
                 // Special case: applying mark to an effectively empty text node placeholder (e.g. after BR, or empty para)
                 // ProseMirror might store a "zero-width non-breaking space" with marks in such cases.
                 // For now, if text is empty, and range is 0-width, we could add a zero-width char with mark,
@@ -76,7 +76,7 @@ export class AddMarkStep implements Step {
             if (nodesToInsert.length === 1 && 
                 nodesToInsert[0].isText && 
                 (nodesToInsert[0] as TextNode).text === originalTextNode.text &&
-                JSON.stringify(normalizeMarks([...(nodesToInsert[0].marks || [])])) === JSON.stringify(normalizeMarks([...originalTextNode.marks]))) { // Crude check
+                marksEq(normalizeMarks([...(nodesToInsert[0].marks || [])]), normalizeMarks([...(originalTextNode.marks || [])]))) { // Use marksEq
                 // No actual change to this node
                 continue;
             }
