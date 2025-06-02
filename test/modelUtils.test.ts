@@ -188,7 +188,7 @@ describe('Position Conversion Utilities', () => {
         // (e.g., end of text node vs. start of next sibling if it's an element boundary).
         // A robust test is to see if the resolved ModelPosition converts back to the same flat offset.
         const reconvertedFlatOffset = modelPositionToFlatOffset(testDoc, resolvedModelPos);
-
+        
         if (reconvertedFlatOffset !== expectedFlatOff) {
             // Log details if the reconversion fails, helps in debugging.
             console.warn(`Bidirectional test warning for: ${description}`);

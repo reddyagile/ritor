@@ -4,7 +4,7 @@ import {
   TextNode,
   HardBreakNode,
   AnyMark,
-  // LinkMark,
+  // LinkMark, 
   BaseNode,
   TextNode as ModelTextNode, // Use alias if TextNode name conflicts or for clarity
   // DocNode, ParagraphNode, HardBreakNode specific types might be replaced by BaseNode checks + node.type.name
@@ -50,7 +50,7 @@ function renderDOMOutputSpec(spec: DOMOutputSpec, contentRenderer?: () => string
   } else if (attrs === 0) { // ["tag", 0, ...more]
     hasContentHole = true;
   }
-
+  
   // For void elements like <br>, <hr>, <img>, they shouldn't have a closing tag or content.
   // A proper list of void elements would be better.
   const voidElements = ["br", "hr", "img"];
@@ -66,7 +66,7 @@ function renderDOMOutputSpec(spec: DOMOutputSpec, contentRenderer?: () => string
       contentHtml = contentRenderer();
     }
     html += contentHtml;
-  } else if (typeof attrs !== 'object' && contentRenderer) {
+  } else if (typeof attrs !== 'object' && contentRenderer) { 
     // If attrs was not an object (e.g. it was the content hole 0, or not provided)
     // and there's a content renderer, render the content.
     // This path is taken if spec is like ["tag", 0] or just ["tag"] and content is expected.
@@ -89,7 +89,7 @@ export function renderInlineNodes(nodes: ReadonlyArray<BaseNode>, schema: any): 
     const markType = mark.type as MarkType; // Mark.type is MarkType
     const spec = markType.toDOM(mark, true); // true for inline context
     if (typeof spec === 'string') return ""; // Simple string spec not for wrapping
-
+    
     let tagHtml = "";
     if (spec[0]) { // Has a tag name
         if (opening) {
@@ -134,7 +134,7 @@ export function renderInlineNodes(nodes: ReadonlyArray<BaseNode>, schema: any): 
       for (const markToOpen of newMarksToOpen) {
           html += getMarkTags(markToOpen, true); // true for opening tag
       }
-
+      
       html += escapeHtml(textNode.text);
       activeMarks = [...desiredMarks]; // Update active marks, ensure copy
 
@@ -205,7 +205,7 @@ if (isMainModule) {
   // To manually test renderer with schema-based nodes (conceptual):
   /*
   const mySchema = new Schema({ nodes: basicNodeSpecs, marks: basicMarkSpecs }); // Assuming basicNodeSpecs/Marks are imported
-
+  
   const simpleDoc = mySchema.createDoc([
     mySchema.node("paragraph", null, [
       mySchema.text("Hello, "),

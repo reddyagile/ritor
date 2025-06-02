@@ -28,10 +28,10 @@ export function normalizeInlineArray(inlineNodes: ReadonlyArray<InlineNode>, sch
     let lastNode: InlineNode | null = null;
     for (const node of inlineNodes) {
         if (lastNode && lastNode.isText && !lastNode.isLeaf && node.isText && !node.isLeaf &&
-            marksEq(lastNode.marks || [], node.marks || [])) {
+            marksEq(lastNode.marks || [], node.marks || [])) { 
             const mergedText = getText(lastNode) + getText(node); // Use getText helper
             if (mergedText) {
-                const currentSchema = schema || node.type.schema;
+                const currentSchema = schema || node.type.schema; 
                 if (!currentSchema) throw new Error("Schema must be available to normalize inline array and create text nodes.");
                 const newTextNode = currentSchema.text(mergedText, lastNode.marks) as TextNode;
                 result[result.length - 1] = newTextNode;
@@ -78,7 +78,7 @@ export function flatOffsetToModelPosition(doc: DocNode, targetFlatOffset: number
                 if (currentRemainingOffset < childNodeSize) { path.push(childIndex); currentElement = child; currentRemainingOffset -= 1; foundChildToDescend = true; break; }
                 else { currentRemainingOffset -= childNodeSize; }
             }
-        }
+        } 
         if (!foundChildToDescend) return { path, offset: children.length };
     }
 }
@@ -126,18 +126,18 @@ export function replaceNodeInPathWithMany( doc: DocNode, pathToOriginalNode: num
     if (pathToOriginalNode.length === 0) { if (newNodes.length === 1 && newNodes[0].type === doc.type) return newNodes[0] as DocNode; console.error("Cannot replace doc root with multiple/wrong nodes."); return null; }
     const parentPath = pathToOriginalNode.slice(0, -1); const childIdxToReplace = pathToOriginalNode[pathToOriginalNode.length - 1];
     let directParent: BaseNode | null = doc;
-    if (parentPath.length > 0) directParent = nodeAtPath(doc, parentPath);
+    if (parentPath.length > 0) directParent = nodeAtPath(doc, parentPath); 
     if (!directParent?.content || childIdxToReplace >= directParent.content.length) { console.error("Invalid parent path or child index for replaceNodeInPathWithMany"); return null; }
     const newParentContent = [...directParent.content]; newParentContent.splice(childIdxToReplace, 1, ...newNodes);
-
+    
     function cloneWithModifiedContent(originalRoot: BaseNode, targetParentPath: number[], pathIdx: number, newContentForTargetParent: BaseNode[]): BaseNode {
         const nodeToProcess = (pathIdx === 0) ? originalRoot : nodeAtPath(originalRoot, targetParentPath.slice(0, pathIdx))!; // originalRoot is doc for initial call
 
         if (pathIdx === targetParentPath.length) { // We are at the direct parent whose content array needs to be newContentForTargetParent
             return schema.node(nodeToProcess.type, nodeToProcess.attrs, newContentForTargetParent, nodeToProcess.marks);
         }
-        const currentChildIndexInPath = targetParentPath[pathIdx];
-        const originalChildren = nodeToProcess.content || [];
+        const currentChildIndexInPath = targetParentPath[pathIdx]; 
+        const originalChildren = nodeToProcess.content || []; 
         const newChildren = [...originalChildren];
         newChildren[currentChildIndexInPath] = cloneWithModifiedContent(originalRoot, targetParentPath, pathIdx + 1, newContentForTargetParent);
         return schema.node(nodeToProcess.type, nodeToProcess.attrs, newChildren, nodeToProcess.marks);
@@ -178,9 +178,9 @@ export function sliceDocByFlatOffsets(doc: DocNode, fromFlat: number, toFlat: nu
                const nodeN = inlineContent[toIdx]; if (nodeN?.isText && !nodeN.isLeaf) { if (toOff > 0) sliced.push(schema.text(getText(nodeN).slice(0, toOff), nodeN.marks)); } else if (nodeN && toOff > 0) { sliced.push(nodeN); }}
         return Slice.fromFragment(normalizeInlineArray(sliced as InlineNode[], schema));
     }
-    let startBlockIdx = -1, endBlockIdx = -1;
+    let startBlockIdx = -1, endBlockIdx = -1; 
     if (fromPos.path.length === 0) startBlockIdx = fromPos.offset; else if (fromPos.path.length === 1 && fromPos.offset === 0) startBlockIdx = fromPos.path[0]; else startBlockIdx = fromPos.path[0];
-    if (toPos.path.length === 0) endBlockIdx = toPos.offset -1;
+    if (toPos.path.length === 0) endBlockIdx = toPos.offset -1; 
     else if (toPos.path.length === 1) { const block = nodeAtPath(doc, [toPos.path[0]]); if (block && ( (block.isText && toPos.offset === getText(block).length) || (!block.isText && !block.isLeaf && toPos.offset === (block.content?.length || 0)) || (block.isLeaf && toPos.offset === 1) ) ) endBlockIdx = toPos.path[0]; else endBlockIdx = toPos.path[0] -1; }
     else { endBlockIdx = toPos.path[0]; }
     const slicedBlocks: BaseNode[] = [];

@@ -20,7 +20,7 @@ export class AddMarkStep implements Step {
     apply(doc: DocNode): StepResult {
         const schema = doc.type.schema;
         let newDoc = doc;
-
+        
         const textNodesInRange = findTextNodesInRange(doc, this.from, this.to, schema);
 
         if (textNodesInRange.length === 0) {
@@ -38,7 +38,7 @@ export class AddMarkStep implements Step {
 
         for (const segment of textNodesInRange) {
             const { node: originalTextNode, path, startOffsetInNode, endOffsetInNode } = segment;
-
+            
             const nodesToInsert: BaseNode[] = [];
             const text = originalTextNode.text;
 
@@ -51,7 +51,7 @@ export class AddMarkStep implements Step {
             const markedTextContent = text.slice(startOffsetInNode, endOffsetInNode);
             if (markedTextContent.length > 0) { // Only add if there's text to mark
                 let newMarks = (originalTextNode.marks || []).filter(m => m.type !== this.mark.type); // Remove old mark of same type
-                newMarks.push(this.mark);
+                newMarks.push(this.mark); 
                 newMarks = normalizeMarks(newMarks); // Ensure sorted, no duplicates
                 nodesToInsert.push(schema.text(markedTextContent, newMarks));
             } else if (startOffsetInNode === 0 && endOffsetInNode === 0 && text.length === 0 && originalTextNode.marks.length === 0) {
@@ -68,13 +68,13 @@ export class AddMarkStep implements Step {
             if (endOffsetInNode < text.length) {
                 nodesToInsert.push(schema.text(text.slice(endOffsetInNode), originalTextNode.marks));
             }
-
+            
             // If nodesToInsert is empty (e.g. marking an empty part of an empty text node),
             // but the original node had text or marks, we might be deleting it.
             // This shouldn't happen if from < to and textNodesInRange found something.
             // If nodesToInsert is same as original node, skip.
-            if (nodesToInsert.length === 1 &&
-                nodesToInsert[0].isText &&
+            if (nodesToInsert.length === 1 && 
+                nodesToInsert[0].isText && 
                 (nodesToInsert[0] as TextNode).text === originalTextNode.text &&
                 JSON.stringify(normalizeMarks([...(nodesToInsert[0].marks || [])])) === JSON.stringify(normalizeMarks([...originalTextNode.marks]))) { // Crude check
                 // No actual change to this node
@@ -88,8 +88,8 @@ export class AddMarkStep implements Step {
             }
             newDoc = tempDoc;
         }
-
-        return { doc: newDoc, map: StepMap.identity };
+        
+        return { doc: newDoc, map: StepMap.identity }; 
     }
 
     getMap(): StepMap {

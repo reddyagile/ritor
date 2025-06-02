@@ -42,7 +42,7 @@ export class Mapping {
     appendMapping(other: Mapping): Mapping {
         return new Mapping([...this.maps, ...other.maps]);
     }
-
+    
     /**
      * Gets an inverted version of this mapping.
      * This is a PoC implementation that inverts each StepMap in reverse order.

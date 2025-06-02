@@ -4,7 +4,7 @@ import { DocNode } from '../documentModel.js'; // Adjust path as needed
 import { StepMap } from './stepMap.js';
 // Slice might be needed if invert() or other methods return/deal with Slices directly.
 // For now, ReplaceStep will use it internally.
-import { Slice } from './slice.js';
+import { Slice } from './slice.js'; 
 
 export interface StepResult {
     /** The transformed document. Null if the step failed. */

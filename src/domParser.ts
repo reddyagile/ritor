@@ -1,7 +1,7 @@
 // src/domParser.ts
 
-import { Schema, NodeType } from './schema.js';
-import { ParseRule, DOMParserInstance } from './schemaSpec.js';
+import { Schema, NodeType } from './schema.js'; 
+import { ParseRule, DOMParserInstance } from './schemaSpec.js'; 
 import { DocNode, BaseNode, TextNode, Mark, marksEq, normalizeMarks } from './documentModel.js';
 import { Slice } from './transform/slice.js'; // For Slice.empty, though not used here directly
 
@@ -27,14 +27,14 @@ export class DOMParser {
         }
         return this.schema.node(this.schema.topNodeType, null, content) as DocNode;
     }
-
+    
     public parseFragment(
-        domFragmentRoot: HTMLElement | DocumentFragment,
+        domFragmentRoot: HTMLElement | DocumentFragment, 
         parentModelType?: NodeType // Context for parsing fragment children
     ): { nodes: BaseNode[], openStart: number, openEnd: number } {
         const nodes: BaseNode[] = [];
         const children = domFragmentRoot.childNodes;
-        const contextType = parentModelType || this.schema.topNodeType;
+        const contextType = parentModelType || this.schema.topNodeType; 
 
         for (let i = 0; i < children.length; i++) {
             const parsedResult = this.parseNode(children[i] as ChildNode, [], contextType);
@@ -92,7 +92,7 @@ export class DOMParser {
                 }
             }
         }
-
+        
         // If the fragment consists of only inline nodes (or text nodes), it's likely open on both sides.
         // However, if it's a single block node (e.g. pasting just a paragraph), it's closed.
         if (nodes.length > 0 && nodes.every(n => n.isText || (n.type.isInline && !n.type.isBlock))) {
@@ -113,14 +113,14 @@ export class DOMParser {
         // ... (rest of parseNode method from previous correct version)
         if (domNode.nodeType === Node.TEXT_NODE) {
             const text = domNode.nodeValue || "";
-            if (text.trim() === '' && activeMarks.length === 0) return null;
-            return this.schema.text(text, normalizeMarks(activeMarks));
+            if (text.trim() === '' && activeMarks.length === 0) return null; 
+            return this.schema.text(text, normalizeMarks(activeMarks)); 
         }
-        if (domNode.nodeType !== Node.ELEMENT_NODE) return null;
+        if (domNode.nodeType !== Node.ELEMENT_NODE) return null; 
 
         const element = domNode as HTMLElement;
         const elementName = element.nodeName.toLowerCase();
-
+        
         const marksFromThisElement = this.parseMarks(element, parentModelType);
         const currentEffectiveMarks = normalizeMarks([...activeMarks, ...marksFromThisElement]);
 
@@ -128,7 +128,7 @@ export class DOMParser {
             const nodeType = this.schema.nodes[nodeTypeName];
             if (nodeType.spec.parseDOM) {
                 for (const rule of nodeType.spec.parseDOM) {
-                    if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p" || rule.tag?.includes("h"))) {
+                    if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p" || rule.tag?.includes("h"))) { 
                         console.log(`[PARSE_NODE_TRACE] Checking NodeType ${nodeTypeName} rule: tag="${rule.tag}", context="${rule.context}" against <${elementName} class="${element.className}"> with parentModelType: ${parentModelType?.name}`);
                     }
                     if (this.matchesRule(element, rule, elementName, parentModelType)) {
@@ -138,7 +138,7 @@ export class DOMParser {
 
                         let parsedChildren: BaseNode[] = [];
                         if (typeof rule.getContent === 'function') {
-                            parsedChildren = rule.getContent(element, this as DOMParserInstance);
+                            parsedChildren = rule.getContent(element, this as DOMParserInstance); 
                         } else if (!nodeType.isLeafType) {
                             for (let i = 0; i < element.childNodes.length; i++) {
                                 const childResult = this.parseNode(element.childNodes[i] as ChildNode, currentEffectiveMarks, nodeType);
@@ -148,14 +148,14 @@ export class DOMParser {
                                 }
                             }
                         }
-
-                        if (!nodeType.isLeafType) {
+                        
+                        if (!nodeType.isLeafType) { 
                             if (!nodeType.checkContent(parsedChildren)) {
                                 console.warn( `Schema validation failed during DOMParser.parseNode for content of node type: ${nodeType.name}.`, "\nDOM element:", element.outerHTML, "\nExpected content expression:", nodeType.contentExpressionString, "\nParsed child content (model nodes):", parsedChildren.map(n => n.type.name));
                             }
                         }
-
-                        if (nodeType.isTextType) {
+                        
+                        if (nodeType.isTextType) { 
                             return this.schema.text(element.textContent || "", currentEffectiveMarks);
                         }
                         return this.schema.node(nodeType, attrs, parsedChildren);
@@ -165,7 +165,7 @@ export class DOMParser {
                 }
             }
         }
-
+        
         const childrenContent: BaseNode[] = [];
         for (let i = 0; i < element.childNodes.length; i++) {
             const childResult = this.parseNode(element.childNodes[i] as ChildNode, currentEffectiveMarks, parentModelType);
@@ -174,7 +174,7 @@ export class DOMParser {
                 else childrenContent.push(childResult);
             }
         }
-
+        
         if (marksFromThisElement.length > 0 && activeMarks.length === marksFromThisElement.reduce((l,m)=> l + (activeMarks.find(am => am.eq(m))?1:0) ,0) ) {
              if (DEBUG_PARSE_NODE) console.log(`[PARSE_NODE_TRACE] Fallback: Element ${elementName} was unknown as a node, but contributed marks. Returning its parsed children [${childrenContent.map(c=>c.type.name).join(', ')}].`);
             return childrenContent.length > 0 ? childrenContent : null;
@@ -189,7 +189,7 @@ export class DOMParser {
         return childrenContent.length > 0 ? childrenContent : null;
     }
 
-    private parseMarks(element: HTMLElement, parentModelType?: NodeType): Mark[] {
+    private parseMarks(element: HTMLElement, parentModelType?: NodeType): Mark[] { 
         let marks: Mark[] = [];
         for (const markTypeName in this.schema.marks) {
             const markType = this.schema.marks[markTypeName];
@@ -202,16 +202,16 @@ export class DOMParser {
                 }
             }
         }
-        return normalizeMarks(marks);
+        return normalizeMarks(marks); 
     }
 
-    public matchesRule(element: HTMLElement, rule: ParseRule, elementName?: string, parentModelType?: NodeType): boolean {
-        const elName = elementName || element.nodeName.toLowerCase();
-        let tagConditionsMet = false; let styleConditionsMet = false; let contextCondMet = true; let baseTagNameForRule = "";
+    public matchesRule(element: HTMLElement, rule: ParseRule, elementName?: string, parentModelType?: NodeType): boolean { 
+        const elName = elementName || element.nodeName.toLowerCase(); 
+        let tagConditionsMet = false; let styleConditionsMet = false; let contextCondMet = true; let baseTagNameForRule = ""; 
         const ruleIsRelevantForDebug = DEBUG_PARSE_NODE && (rule.tag === "p.special" || (rule.tag === "p" && elName === "p") || rule.tag?.includes("h"));
         if (ruleIsRelevantForDebug) { console.log(`[MATCHES_RULE_TRACE] Checking rule: tag="${rule.tag}", context="${rule.context}". Element: <${elName} class="${element.className}">. ParentType: ${parentModelType?.name}.`);}
         if (rule.tag) {
-            let processedTag = rule.tag; const classListToMatch: string[] = []; const attributesToMatch: { name: string, value?: string }[] = []; baseTagNameForRule = "";
+            let processedTag = rule.tag; const classListToMatch: string[] = []; const attributesToMatch: { name: string, value?: string }[] = []; baseTagNameForRule = ""; 
             const attrSelectorMatch = processedTag.match(/^(.*?)\[([^=\]]+)(?:=(["']?)([^\]"']+)\3)?\]$/);
             if (attrSelectorMatch) { processedTag = attrSelectorMatch[1]; attributesToMatch.push({ name: attrSelectorMatch[2], value: attrSelectorMatch[4] });}
             if (processedTag.includes('.')) { const parts = processedTag.split('.'); baseTagNameForRule = parts[0]; classListToMatch.push(...parts.slice(1)); } else { baseTagNameForRule = processedTag; }
@@ -230,7 +230,7 @@ export class DOMParser {
             if (currentStyleCheckPass) styleConditionsMet = true;
         }
         if (rule.context) {
-            contextCondMet = false;
+            contextCondMet = false; 
             if (!parentModelType) { if (ruleIsRelevantForDebug) console.log(`[MATCHES_RULE_TRACE] Rule ${rule.tag} Context check FAIL: no parentModelType.`); }
             else { const contextParts = rule.context.replace(/\/$/, "").split('/'); const requiredDirectParentName = contextParts[contextParts.length - 1]; if (parentModelType.name === requiredDirectParentName) { contextCondMet = true; }
                    else { if (ruleIsRelevantForDebug) console.log(`[MATCHES_RULE_TRACE] Rule ${rule.tag} Context check FAIL: parent "${parentModelType.name}" !== required "${requiredDirectParentName}"`); }
@@ -238,13 +238,13 @@ export class DOMParser {
         }
         let finalMatch = false;
         if (rule.tag && rule.style && rule.context) finalMatch = tagConditionsMet && styleConditionsMet && contextCondMet;
-        else if (rule.tag && rule.style) finalMatch = tagConditionsMet && styleConditionsMet && contextCondMet;
-        else if (rule.tag && rule.context) finalMatch = tagConditionsMet && contextCondMet;
-        else if (rule.style && rule.context) finalMatch = styleConditionsMet && contextCondMet;
-        else if (rule.tag) finalMatch = tagConditionsMet && contextCondMet;
+        else if (rule.tag && rule.style) finalMatch = tagConditionsMet && styleConditionsMet && contextCondMet; 
+        else if (rule.tag && rule.context) finalMatch = tagConditionsMet && contextCondMet;   
+        else if (rule.style && rule.context) finalMatch = styleConditionsMet && contextCondMet; 
+        else if (rule.tag) finalMatch = tagConditionsMet && contextCondMet; 
         else if (rule.style) finalMatch = styleConditionsMet && contextCondMet;
         else if (rule.context) finalMatch = contextCondMet;
-        else return false;
+        else return false; 
         if (ruleIsRelevantForDebug) { console.log(`[MATCHES_RULE_TRACE] Rule ${rule.tag}, context ${rule.context || '-'} Final Decision: ${finalMatch}. TagOK: ${tagConditionsMet}(${baseTagNameForRule} vs ${elName}), StyleOK: ${styleConditionsMet}, ContextOK: ${contextCondMet}, ParentType: ${parentModelType?.name}`); }
         return finalMatch;
     }

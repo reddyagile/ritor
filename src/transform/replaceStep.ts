@@ -4,7 +4,7 @@ import { DocNode, BaseNode, TextNode, InlineNode } from '../documentModel.js';
 import { Step, StepResult } from './step.js';
 import { StepMap } from './stepMap.js';
 import { Slice } from './slice.js';
-import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray, nodeAtPath, replaceNodeAtPath, sliceDocByFlatOffsets, getText, marksEq } from '../modelUtils.js';
+import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray, nodeAtPath, replaceNodeAtPath, sliceDocByFlatOffsets, getText, marksEq } from '../modelUtils.js'; 
 import { Schema } from '../schema.js';
 
 const DEBUG_REPLACESTEP = (globalThis as any).DEBUG_REPLACESTEP || false;
@@ -12,16 +12,16 @@ const DEBUG_REPLACESTEP = (globalThis as any).DEBUG_REPLACESTEP || false;
 
 export class ReplaceStep implements Step {
     constructor(
-        public readonly from: number,
-        public readonly to: number,
-        public readonly slice: Slice
+        public readonly from: number, 
+        public readonly to: number,   
+        public readonly slice: Slice  
     ) {
         if (from > to) throw new Error("ReplaceStep: 'from' must be less than or equal to 'to'");
     }
 
     apply(doc: DocNode): StepResult {
         const schema = doc.type.schema;
-
+        
         // const currentDebugFlag = DEBUG_REPLACESTEP || (globalThis as any).DEBUG_REPLACESTEP;
         // Forcing off for this cleanup, test file will control it.
         const currentDebugFlag = (globalThis as any).DEBUG_REPLACESTEP || false;
@@ -31,21 +31,21 @@ export class ReplaceStep implements Step {
             console.log(`[ReplaceStep] APPLY START: from=${this.from}, to=${this.to}, sliceSize=${this.slice.size}`);
         }
 
-        if (this.from === 0 && this.to === doc.nodeSize) {
+        if (this.from === 0 && this.to === doc.nodeSize) { 
             if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] Applying full document replacement.");
             if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] Initial slice.content:", JSON.stringify(this.slice.content.map(n => ({type: n.type.name, text: (n as any).text}))));
-
+            
             let newContent = this.slice.content;
-            const docContentMatcher = doc.type.contentMatcher;
-
+            const docContentMatcher = doc.type.contentMatcher; 
+            
             let calculatedDocExpectsBlocks = false;
             if (docContentMatcher && docContentMatcher.length > 0) {
                 const firstMatcher = docContentMatcher[0];
                 if (firstMatcher.type === "group" && firstMatcher.value === "block") {
                     calculatedDocExpectsBlocks = true;
                 } else if (firstMatcher.isChoice && firstMatcher.options) {
-                    calculatedDocExpectsBlocks = firstMatcher.options.every(opt =>
-                        opt === 'block' ||
+                    calculatedDocExpectsBlocks = firstMatcher.options.every(opt => 
+                        opt === 'block' || 
                         (schema.nodes[opt]?.isBlock) ||
                         (schema.groups.get(opt)?.every(nodeType => nodeType.isBlock))
                     );
@@ -58,7 +58,7 @@ export class ReplaceStep implements Step {
             if (calculatedDocExpectsBlocks && sliceHasInline) {
                 const defaultBlockType = schema.nodes.paragraph;
                 if (!defaultBlockType) { if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] No paragraph type for wrapping."); return {failed: "Cannot wrap inline slice content: paragraph node type not found in schema."}; }
-
+                
                 const sliceIsAllInline = this.slice.content.every(n => n.type.spec.inline || n.isText);
                 if (currentDebugFlag) console.log(`[ReplaceStep-FULLDOC] Slice is all inline: ${sliceIsAllInline}`);
 
@@ -67,7 +67,7 @@ export class ReplaceStep implements Step {
                     if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] Normalized inline for wrapping:", JSON.stringify(normalizedInline.map(n => ({type: n.type.name, text: (n as any).text}))));
                     newContent = [defaultBlockType.create(null, normalizedInline)];
                     if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] newContent after wrapping all-inline slice:", JSON.stringify(newContent.map(n => ({type: n.type.name, content: (n.content ||[]).map(c=>(c as any).text) }))));
-                } else {
+                } else { 
                     if (currentDebugFlag) console.log("[ReplaceStep-FULLDOC] Slice has mixed block/inline content, processing for wrapping.");
                     const processedSliceContent: BaseNode[] = []; let currentInlineGroup: InlineNode[] = [];
                     for (const node of this.slice.content) {
@@ -80,7 +80,7 @@ export class ReplaceStep implements Step {
                 }
             }
             const newWholeDoc = schema.node(doc.type, doc.attrs, newContent) as DocNode;
-            const map = new StepMap([this.from, this.to, this.from, this.from + newWholeDoc.nodeSize]);
+            const map = new StepMap([this.from, this.to, this.from, this.from + newWholeDoc.nodeSize]); 
             if (currentDebugFlag) console.log(`[ReplaceStep] Full doc replacement. New doc nodeSize: ${newWholeDoc.nodeSize}. StepMap created.`);
             return { doc: newWholeDoc, map };
         }
@@ -109,19 +109,19 @@ export class ReplaceStep implements Step {
                 if (this.slice.openEnd > 0 && newInlineContent.length > 0 && textAfterSlice.length > 0) { const lastPushedNodeIndex = newInlineContent.length -1; const lastPushedNode = newInlineContent[lastPushedNodeIndex]; if (lastPushedNode.isText && !lastPushedNode.isLeaf && marksEq(lastPushedNode.marks || [], marksAfterSlice)) { const mergedEndText = getText(lastPushedNode) + textAfterSlice; newInlineContent[lastPushedNodeIndex] = schema.text(mergedEndText, lastPushedNode.marks || []); } else { if (textAfterSlice.length > 0) newInlineContent.push(schema.text(textAfterSlice, marksAfterSlice));}} else { if (textAfterSlice.length > 0) newInlineContent.push(schema.text(textAfterSlice, marksAfterSlice));}
                 for (let i = toInlineNodeIndex + 1; i < originalInlineContent.length; i++) newInlineContent.push(originalInlineContent[i]);
                 const normalizedNewInlineContent = normalizeInlineArray(newInlineContent as InlineNode[], schema); const newParentBlock = schema.node(parentBlockNode.type, parentBlockNode.attrs, normalizedNewInlineContent, parentBlockNode.marks);
-                let finalDoc: DocNode | null = null; if (parentBlockPath.length === 0) return {failed: "Logic error: inline replacement parent path empty."}; const newRootBaseNode = replaceNodeAtPath(doc, parentBlockPath, newParentBlock, schema); if (newRootBaseNode?.type.name === doc.type.name) finalDoc = newRootBaseNode as DocNode; else if (newRootBaseNode === null) finalDoc = null; else return { failed: "Node replacement resulted in unexpected root." };
+                let finalDoc: DocNode | null = null; if (parentBlockPath.length === 0) return {failed: "Logic error: inline replacement parent path empty."}; const newRootBaseNode = replaceNodeAtPath(doc, parentBlockPath, newParentBlock, schema); if (newRootBaseNode?.type.name === doc.type.name) finalDoc = newRootBaseNode as DocNode; else if (newRootBaseNode === null) finalDoc = null; else return { failed: "Node replacement resulted in unexpected root." }; 
                 if (!finalDoc) return { failed: "Failed inline modification." };
                 if (currentDebugFlag) console.log("[ReplaceStep] Applied as single-block inline replacement.");
                 return { doc: finalDoc, map: new StepMap([this.from, this.to, this.from, this.from + this.slice.size]) };
             }
         }
-
+        
         if (currentDebugFlag) console.log("[ReplaceStep] Applying as multi-block replacement.");
         // ... (rest of multi-block logic as before) ...
-        let firstAffectedBlockIndex: number; let fromNodeIsBlockBoundary = false;
+        let firstAffectedBlockIndex: number; let fromNodeIsBlockBoundary = false; 
         if (fromPos.path.length === 0) { firstAffectedBlockIndex = fromPos.offset; fromNodeIsBlockBoundary = true; }
         else { firstAffectedBlockIndex = fromPos.path[0]; const fB = doc.content?.[firstAffectedBlockIndex]; if (fromPos.path.length === 1 && fromPos.offset === 0) fromNodeIsBlockBoundary = true; if (fB?.isText && fromPos.offset === 0) fromNodeIsBlockBoundary = true; }
-        let lastAffectedBlockIndex: number; let toNodeIsBlockBoundary = false;
+        let lastAffectedBlockIndex: number; let toNodeIsBlockBoundary = false; 
         if (toPos.path.length === 0) { lastAffectedBlockIndex = toPos.offset - 1; toNodeIsBlockBoundary = true; }
         else { lastAffectedBlockIndex = toPos.path[0]; const tB = doc.content?.[lastAffectedBlockIndex]; if (toPos.path.length === 1) { if (tB && (toPos.offset === (tB.content?.length || 0) && !tB.isText && !tB.isLeaf)) toNodeIsBlockBoundary = true; else if (tB?.isText && !tB.isLeaf && toPos.offset === getText(tB).length) toNodeIsBlockBoundary = true; else if (tB?.isLeaf && toPos.offset === 1) toNodeIsBlockBoundary = true; }}
         if (currentDebugFlag) { console.log(`[ReplaceStep] Calculated Block Indices: firstAffected=${firstAffectedBlockIndex} (boundary=${fromNodeIsBlockBoundary}), lastAffected=${lastAffectedBlockIndex} (boundary=${toNodeIsBlockBoundary})`); }
@@ -134,7 +134,7 @@ export class ReplaceStep implements Step {
         if (lastBlockActualNode && !toNodeIsBlockBoundary && firstAffectedBlockIndex <= lastAffectedBlockIndex) { if (currentDebugFlag) console.log(`[ReplaceStep] Part 4: Handling partial end block. toPos.path.length=${toPos.path.length}, nodeType=${lastBlockActualNode.type.name}`); if (firstAffectedBlockIndex < lastAffectedBlockIndex || fromNodeIsBlockBoundary) {  if (toPos.path.length > 1 && lastBlockActualNode.type.spec.content?.includes("inline")) { const inlineContent = lastBlockActualNode.content || []; const targetIdx = toPos.path[toPos.path.length-1]; const charOff = toPos.offset; const retainedTrail: BaseNode[] = []; const targetInline = inlineContent[targetIdx] as TextNode;  if (targetInline?.isText && !targetInline.isLeaf && charOff < getText(targetInline).length) { retainedTrail.push(schema.text(getText(targetInline).slice(charOff), targetInline.marks)); } for (let i = targetIdx + 1; i < inlineContent.length; i++) retainedTrail.push(inlineContent[i]); if (retainedTrail.length > 0) { const norm = normalizeInlineArray(retainedTrail as InlineNode[], schema); if (norm.length > 0) { finalDocContent.push(schema.node(lastBlockActualNode.type, lastBlockActualNode.attrs, norm)); if (currentDebugFlag) console.log(`[ReplaceStep] Part 4: Kept partial end block (inline content cut). New node: ${finalDocContent[finalDocContent.length-1].type.name} with ${norm.length} children.`); }}} else if (toPos.path.length === 1 && lastBlockActualNode.isText && !lastBlockActualNode.isLeaf) { const textToSlice = getText(lastBlockActualNode); if (toPos.offset < textToSlice.length) { finalDocContent.push(schema.text(textToSlice.slice(toPos.offset), lastBlockActualNode.marks)); if (currentDebugFlag) console.log(`[ReplaceStep] Part 4: Kept partial end block (text block cut).`); }} else { if (currentDebugFlag) console.log(`[ReplaceStep] Part 4: Not a recognized partial end case.`);}} else if (currentDebugFlag) { console.log(`[ReplaceStep] Part 4: Skipped partial end block because it's same as partial start block (fromIndex=${firstAffectedBlockIndex}, toIndex=${lastAffectedBlockIndex}, fromBoundary=${fromNodeIsBlockBoundary}).`); }} else if (currentDebugFlag && toNodeIsBlockBoundary) { console.log(`[ReplaceStep] Part 4: End block is fully replaced or deleted (toNodeIsBlockBoundary=true).`); }
         if (currentDebugFlag) console.log(`[ReplaceStep] Part 5: Adding blocks from index ${lastAffectedBlockIndex + 1}. Original content length: ${currentDocContent.length}`); for (let i = lastAffectedBlockIndex + 1; i < currentDocContent.length; i++) { const blockToAdd = currentDocContent[i]; finalDocContent.push(blockToAdd); if (currentDebugFlag) console.log(`[ReplaceStep] Part 5: Kept block ${i} as is: ${blockToAdd.type.name} (text: ${getText(blockToAdd.content?.[0])})`); }
         if (currentDebugFlag) { console.log("[ReplaceStep] Final assembled docContent before creating new DocNode:"); finalDocContent.forEach((n, idx) => console.log(`  [${idx}] ${n.type.name}: ${n.isText ? `"${getText(n)}"` : (n.content?.map(c=>(c as TextNode).text).join("|") || "no_inline_text")}`)); }
-
+        
         const newDoc = schema.node(doc.type, doc.attrs, finalDocContent) as DocNode;
         const map = new StepMap([this.from, this.to, this.from, this.from + this.slice.size]);
         if (currentDebugFlag) console.log(`[ReplaceStep] APPLY END: New doc nodeSize=${newDoc.nodeSize}. StepMap created.`);

@@ -11,9 +11,9 @@ export interface ModelPosition {
   path: number[];
 
   /**
-   * - If the path points to a Model TextNode (e.g., `path = [blockIndex, inlineTextNodeIndex]`),
+   * - If the path points to a Model TextNode (e.g., `path = [blockIndex, inlineTextNodeIndex]`), 
    *   this is a character offset within that TextNode's `text` string.
-   * - If the path points to a parent Model ElementNode (e.g., `path = [blockIndex]` for a paragraph,
+   * - If the path points to a parent Model ElementNode (e.g., `path = [blockIndex]` for a paragraph, 
    *   or `path = [listIndex, listItemIndex, paraInListItemIndex]` for a paragraph in a list item),
    *   this `offset` typically refers to an *index* among that ElementNode's *child nodes*.
    *   For example, an offset of 0 in an empty paragraph means "at the very start of the paragraph".

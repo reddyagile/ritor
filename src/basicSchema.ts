@@ -1,13 +1,13 @@
 // src/basicSchema.ts
 import { NodeSpec, MarkSpec, Attrs, DOMOutputSpec, ParseRule } from './schemaSpec.js'; // Added ParseRule import
-import { BaseNode, Mark as ModelMark } from './documentModel.js';
+import { BaseNode, Mark as ModelMark } from './documentModel.js'; 
 
 export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   doc: {
     content: "(block | figure)+", // Allow blocks or figures, must have at least one.
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const attrs: Attrs = { class: "ritor-document" };
-        if (node.attrs?.id) {
+        if (node.attrs?.id) { 
             attrs.id = node.attrs.id;
         }
         return ["div", attrs, 0];
@@ -15,17 +15,17 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     // No parseDOM for doc, it's the root.
   },
   // Define special_paragraph_for_li before paragraph for parse rule precedence
-  special_paragraph_for_li: {
+  special_paragraph_for_li: { 
     content: "inline*",
-    group: "block",
+    group: "block", 
     attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => ["p", { id: node.attrs!.id, class:"special-li-p" }, 0],
-    parseDOM: [{ tag: "p.special", context: "list_item/" }]
+    parseDOM: [{ tag: "p.special", context: "list_item/" }] 
   },
   paragraph: { // General paragraph rule
     content: "inline*",
     group: "block",
-    attrs: { id: {} },
+    attrs: { id: {} }, 
     toDOM: (node: BaseNode): DOMOutputSpec => {
       const attrs: Attrs = {};
       if (node.attrs?.id) {
@@ -50,13 +50,13 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     parseDOM: [{ tag: "br" }]
   },
   heading: {
-    attrs: {
+    attrs: { 
         level: { default: 1 },
-        id: {}
-    },
-    content: "inline*",
+        id: {} 
+    }, 
+    content: "inline*", 
     group: "block",
-    defining: true,
+    defining: true, 
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const attrs: Attrs = {};
         if (node.attrs?.id) {
@@ -64,7 +64,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
         }
         return [`h${node.attrs?.level || 1}`, attrs, 0];
     },
-    parseDOM: [
+    parseDOM: [ 
         { tag: "h1", getAttrs: (_domNode) => ({level: 1}) }, // getAttrs now consistent
         { tag: "h2", getAttrs: (_domNode) => ({level: 2}) },
         { tag: "h3", getAttrs: (_domNode) => ({level: 3}) },
@@ -75,27 +75,27 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   },
   list_item: {
     content: "block+", // Simplified content model for debugging context parsing
-    group: "list_item_block",
-    defining: true,
+    group: "list_item_block", 
+    defining: true, 
     attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => ["li", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "li" }],
   },
   // special_paragraph_for_li is now defined before paragraph
   bullet_list: {
-    content: "list_item+",
-    group: "block",
+    content: "list_item+", 
+    group: "block", 
     attrs: { id: {} },
     toDOM: (node: BaseNode): DOMOutputSpec => ["ul", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "ul" }],
   },
   // Removed duplicate special_paragraph_for_li that was here
   ordered_list: {
-    content: "list_item+",
+    content: "list_item+", 
     group: "block",
-    attrs: {
-        order: { default: 1 },
-        id: {}
+    attrs: { 
+        order: { default: 1 }, 
+        id: {} 
     },
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const domAttrs: Attrs = { id: node.attrs!.id };
@@ -104,12 +104,12 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
         }
         return ["ol", domAttrs, 0];
     },
-    parseDOM: [{
-        tag: "ol",
+    parseDOM: [{ 
+        tag: "ol", 
         getAttrs: (domNode: globalThis.Node | string) => { // Changed dom to domNode
-            const htmlElement = domNode as HTMLElement;
+            const htmlElement = domNode as HTMLElement; 
             const start = htmlElement.getAttribute("start");
-            return {
+            return { 
                 order: start ? parseInt(start, 10) : 1,
                 // id will be handled by default if not specified by getAttrs
             };
@@ -117,17 +117,17 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     }],
   },
   blockquote: {
-    content: "block+",
+    content: "block+", 
     group: "block",
     defining: true,
-    attrs: { id: {} },
+    attrs: { id: {} }, 
     toDOM: (node: BaseNode): DOMOutputSpec => ["blockquote", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "blockquote" }],
   },
-  image: {
+  image: { 
     attrs: { src: { default: null }, alt: { default: null }, title: { default: null }, id: {} },
-    atom: true,
-    group: "block",
+    atom: true, 
+    group: "block", 
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const { src, alt, title, id } = node.attrs!;
         const domAttrs: any = { id, src }; // Ensure ID is included
@@ -136,7 +136,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
         return ["img", domAttrs];
     },
     parseDOM: [{
-        tag: "img[src]",
+        tag: "img[src]", 
         getAttrs: (dom: string | HTMLElement) => {
             if (typeof dom === 'string') return false;
             return {
@@ -151,7 +151,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   figcaption: { // New figcaption node
     content: "inline*",
     group: "block", // Conceptually a block, but part of figure
-    attrs: { id: {} },
+    attrs: { id: {} }, 
     toDOM: (node: BaseNode) => ["figcaption", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "figcaption" }]
   },
@@ -203,10 +203,10 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
   bold: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["strong", 0],
     parseDOM: [
-        {tag: "strong"},
-        {tag: "b"},
+        {tag: "strong"}, 
+        {tag: "b"}, 
         // {style: "font-weight=bold"}, // Removed to prevent h1 from getting bold mark
-        {style: "font-weight=700"},
+        {style: "font-weight=700"}, 
         {style: "font-weight=600"}
         // To match "font-weight:bold" specifically on spans, use:
         // {tag: "span", style: "font-weight=bold"}
@@ -215,7 +215,7 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
   italic: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["em", 0],
     parseDOM: [
-        {tag: "i"},
+        {tag: "i"}, 
         {tag: "em"}
         // {style: "font-style=italic"} // Remove to prevent e.g. <em> inside <i> from duplicating if styles are parsed too broadly
     ]
@@ -226,36 +226,36 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
         { tag: "s" },
         { tag: "del" },
         { tag: "strike" },
-        { style: "text-decoration=line-through" },
+        { style: "text-decoration=line-through" }, 
         { style: "text-decoration-line=line-through" } // More modern CSS property
     ]
   },
   link: {
     attrs: {
         href: { default: "" }, // Ensure href is always present
-        title: { default: null }
+        title: { default: null } 
     },
-    inclusive: false,
+    inclusive: false, 
     toDOM: (mark: ModelMark, _inline: boolean): DOMOutputSpec => {
-        const markAttrs = mark.attrs as { href: string, title?: string };
+        const markAttrs = mark.attrs as { href: string, title?: string }; 
         const domAttrs: Attrs = { href: markAttrs.href };
         if (markAttrs.title) {
             domAttrs.title = markAttrs.title;
         }
         return ["a", domAttrs, 0];
     },
-    parseDOM: [{
+    parseDOM: [{ 
         tag: "a[href]", // Use attribute presence selector; getAttrs will still verify href
         getAttrs: (domNodeOrValue: globalThis.Node | string) => {
-            const dom = domNodeOrValue as HTMLAnchorElement;
+            const dom = domNodeOrValue as HTMLAnchorElement; 
             // href presence is already checked by the tag selector "a[href]"
             // but it's good practice to still get it here for the attribute value.
-            const href = dom.getAttribute("href");
+            const href = dom.getAttribute("href"); 
             // Though the rule a[href] ensures href exists, getAttribute can still return null if attr is empty string
             if (href === null) return false; // Should not happen if a[href] matched and browser enforces href presence
-            return {
-                href: href,
-                title: dom.getAttribute("title") || null
+            return { 
+                href: href, 
+                title: dom.getAttribute("title") || null 
             };
         }
     }]

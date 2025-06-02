@@ -45,7 +45,7 @@ export class StepMap {
                     return insertedRangeEnd + offset;
                 }
             }
-
+            
             // Position is after this deleted range, calculate the offset this change introduced
             const lengthChange = (insertedRangeEnd - insertedRangeStart) - (deletedRangeEnd - deletedRangeStart);
             offset += lengthChange;

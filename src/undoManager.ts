@@ -62,7 +62,7 @@ export class UndoManager {
     }
     const nextState = this.redoStack.pop()!;
     // When redoing, the currentDoc (which is the state *before* redo) becomes the new undo point.
-    this.undoStack.push(currentDoc);
+    this.undoStack.push(currentDoc); 
     if (this.undoStack.length > this.maxHistory) { // Maintain max history for undo stack
         this.undoStack.shift();
     }

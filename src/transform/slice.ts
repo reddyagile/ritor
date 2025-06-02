@@ -22,7 +22,7 @@ export class Slice {
     static fromFragment(fragment: ReadonlyArray<BaseNode>): Slice {
         return new Slice(fragment, 0, 0);
     }
-
+    
     // Creates a slice from a single node.
     static fromNode(node: BaseNode): Slice {
         return new Slice([node], 0, 0);

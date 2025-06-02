@@ -67,7 +67,7 @@ export class DomPatcher {
     // Compare content array by reference first for performance.
     // If model logic always creates new content arrays on any child change, this is effective.
     if (nodeA.content === nodeB.content) return true;
-
+    
     // If content arrays are different instances, check if their children are effectively equal.
     // This makes the check deep for content, which might be too slow.
     // For this PoC, we'll stick to reference for content array for container nodes.
@@ -87,14 +87,14 @@ export class DomPatcher {
         // For the PoC, if content array references are different, we'll let patch handle it.
         // So, if we reach here, it means type & attrs are same.
         // If it's a container and content array refs differ, it's considered different for patch.
-        return false;
+        return false; 
     } else if (nodeA.content || nodeB.content) { // One has content, the other doesn't
         return false;
     }
-
+    
     return true; // All checks passed
   }
-
+  
   private updateDomAttributes(element: HTMLElement, oldAttrs: Attrs | undefined, newAttrs: Attrs | undefined) {
     oldAttrs = oldAttrs || {};
     newAttrs = newAttrs || {};
@@ -153,9 +153,9 @@ export class DomPatcher {
       // console.log("DomPatcher: Skipping patch for identical document reference.");
       return;
     }
-    const renderOpts = this.schema;
+    const renderOpts = this.schema; 
 
-    if (!this.currentDoc || this.rootElement.innerHTML === '' || !this.currentDoc.content || this.currentDoc.content.length === 0) {
+    if (!this.currentDoc || this.rootElement.innerHTML === '' || !this.currentDoc.content || this.currentDoc.content.length === 0) { 
       const fullHtml = renderDocumentToHtml(newDoc, renderOpts);
       this.rootElement.innerHTML = fullHtml;
       this.currentDoc = newDoc;
@@ -186,7 +186,7 @@ export class DomPatcher {
             }
         }
     }
-
+    
     let lastPlacedNode: ChildNode | null = null;
 
     // Iterate newBlockNodes to update/add/move
@@ -238,7 +238,7 @@ export class DomPatcher {
              }
           }
         }
-
+        
         // Positioning
         const expectedNextSibling = lastPlacedNode ? lastPlacedNode.nextSibling : this.rootElement.firstChild;
         if (expectedNextSibling !== domNodeToUpdate) {
@@ -284,7 +284,7 @@ export class DomPatcher {
 // <body>
 //   <div id="editor-root"></div>
 //   <button id="updateButton">Update Document</button>
-//   <script type="module" src="example.js"></script>
+//   <script type="module" src="example.js"></script> 
 // </body>
 // </html>
 
@@ -363,7 +363,7 @@ if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test_node') {
     // const dom = new JSDOM('<!DOCTYPE html><body><div id="editor-root"></div></body>');
     // global.document = dom.window.document;
     // global.HTMLElement = dom.window.HTMLElement;
-    // global.Node = dom.window.Node;
+    // global.Node = dom.window.Node; 
     // global.HTMLTemplateElement = dom.window.HTMLTemplateElement;
     // const { Schema } = require('./schema.js'); // Adjust path
     // const { basicNodeSpecs, basicMarkSpecs } = require('./basicSchema.js'); // Adjust path
@@ -372,7 +372,7 @@ if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test_node') {
 
     console.log("--- DOM Patcher Node.js Test Sketch (requires JSDOM setup) ---");
     const mockRoot = document.createElement('div');
-
+    
     const initialTestDoc = testSchema.node("doc", null, [
         testSchema.node("paragraph", null, [testSchema.text("Initial Paragraph for Node Test")])
     ]);

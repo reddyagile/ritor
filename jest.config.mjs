@@ -6,7 +6,7 @@ export default {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
       // If you have specific tsconfig for tests, specify here:
-      // tsconfig: 'tsconfig.test.json'
+      // tsconfig: 'tsconfig.test.json' 
     }],
   },
   moduleNameMapper: {
@@ -16,5 +16,5 @@ export default {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   // If your package.json has "type": "module", Jest needs this to treat .ts files as ESM
-  extensionsToTreatAsEsm: ['.ts'],
+  extensionsToTreatAsEsm: ['.ts'], 
 };

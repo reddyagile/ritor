@@ -3,17 +3,17 @@
 import { DOMParser as RitorDOMParser } from '../src/domParser.js';
 import { Schema } from '../src/schema.js';
 import { basicNodeSpecs, basicMarkSpecs } from '../src/basicSchema.js';
-import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js';
+import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js'; 
 import { Attrs, NodeSpec } from '../src/schemaSpec.js';
 
 // Disable debug logging
-(globalThis as any).DEBUG_REPLACESTEP = false;
-(globalThis as any).DEBUG_MATCHES_RULE = false;
+(globalThis as any).DEBUG_REPLACESTEP = false; 
+(globalThis as any).DEBUG_MATCHES_RULE = false; 
 (globalThis as any).DEBUG_CHECK_CONTENT = false;
 
-const schema = new Schema({
-    nodes: basicNodeSpecs,
-    marks: basicMarkSpecs
+const schema = new Schema({ 
+    nodes: basicNodeSpecs, 
+    marks: basicMarkSpecs 
 });
 
 // Helper functions to create nodes
@@ -43,7 +43,7 @@ const getStructure = (node: BaseNode | null): any => {
     }
     const content = node.content ? node.content.map(getStructure) : [];
     const attrsToCompare = { ...node.attrs };
-    delete attrsToCompare.id;
+    delete attrsToCompare.id; 
     return { type: node.type.name, ...(Object.keys(attrsToCompare).length ? { attrs: attrsToCompare } : {}), ...(content.length ? { content } : {}) };
 };
 
@@ -100,7 +100,7 @@ describe('RitorDOMParser', () => {
             const resultDoc = parser.parse(tempDiv);
             expect(getStructure(resultDoc)).toEqual({ type: 'doc', content: [{ type: 'paragraph', content: [ { type: 'text', text: 'Nested: ' }, { type: 'text', text: 'bold', marks: ['bold'] }, { type: 'text', text: 'italic', marks: ['bold', 'italic'] } ]}]});
         });
-        it('should parse a link with href and title', () => {
+        it('should parse a link with href and title', () => { 
             const html = "<p>Link: <a href='http://example.com' title='Example'>example</a></p>";
             const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
             const resultDoc = parser.parse(tempDiv);
@@ -120,7 +120,7 @@ describe('RitorDOMParser', () => {
         for (const key in basicNodeSpecs) if (!orderedCustomNodeSpecs[key]) orderedCustomNodeSpecs[key] = basicNodeSpecs[key];
         const schemaWithFancyPara = new Schema({ nodes: orderedCustomNodeSpecs, marks: basicMarkSpecs });
 
-        it('should parse p.fancy as fancy_paragraph', () => {
+        it('should parse p.fancy as fancy_paragraph', () => { 
             const testParser = new RitorDOMParser(schemaWithFancyPara);
             const html = '<p class="fancy">Fancy Text</p><p>Normal Text</p>';
             const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
@@ -128,15 +128,15 @@ describe('RitorDOMParser', () => {
             expect(getStructure(resultDoc)).toEqual({ type: 'doc', content: [ { type: 'fancy_paragraph', content: [{ type: 'text', text: 'Fancy Text'}] }, { type: 'paragraph', content: [{ type: 'text', text: 'Normal Text'}] } ]});
         });
     });
-
+    
     describe('ParseRule.getContent and ParseRule.context', () => {
-        it('should parse a figure with image and figcaption using getContent', () => {
+        it('should parse a figure with image and figcaption using getContent', () => { 
             const html = '<figure><img src="test.png" alt="Test Image"><figcaption>Test Caption</figcaption></figure>';
             const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
-            const resultDoc = parser.parse(tempDiv);
+            const resultDoc = parser.parse(tempDiv); 
             expect(getStructure(resultDoc.content[0]!)).toEqual( { type: "figure", content: [ { type: "image", attrs: { src: "test.png", alt: "Test Image", title: null } }, { type: "figcaption", content: [{ type: "text", text: "Test Caption" }] } ]});
         });
-        it('should parse p.special as special_paragraph_for_li only inside list_item', () => {
+        it('should parse p.special as special_paragraph_for_li only inside list_item', () => { 
             const html = `<ul><li><p class="special">Special in li</p></li><li><p>Regular in li</p></li></ul><p class="special">Special outside li</p><p>Regular outside li</p>`;
             const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
             const resultDoc = parser.parse(tempDiv);
@@ -152,17 +152,17 @@ describe('RitorDOMParser', () => {
             expect(getStructure(resultDoc)).toEqual({ type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Known content inside' }] }]});
         });
         it('should handle text directly in a div if no block rule matches first', () => {
-            const html = '<div>Root text<p>Para</p></div>';
+            const html = '<div>Root text<p>Para</p></div>'; 
             const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = html;
-            const parsedNodes = parser['parseFragment'](tempDiv.firstChild as HTMLElement);
-
+            tempDiv.innerHTML = html; 
+            const parsedNodes = parser['parseFragment'](tempDiv.firstChild as HTMLElement); 
+            
             const resultDoc = createDoc(...parsedNodes); // This call will trigger NodeType.create's checkContent for 'doc'
-
-            expect(getStructure(resultDoc)).toEqual({
+            
+            expect(getStructure(resultDoc)).toEqual({ 
                  type: 'doc',
-                 content: [
-                    { type: 'text', text: 'Root text' },
+                 content: [ 
+                    { type: 'text', text: 'Root text' }, 
                     { type: 'paragraph', content: [{ type: 'text', text: 'Para' }] }
                  ]
             });
@@ -173,24 +173,24 @@ describe('RitorDOMParser', () => {
             const nodeCreationWarningFound = consoleWarnSpy.mock.calls.some(callArgs =>
                 typeof callArgs[0] === 'string' &&
                 callArgs[0].startsWith("Invalid content for node type doc:") &&
-                callArgs[0].includes("based on expression \"(block | figure)+\"") &&
-                callArgs[0].includes("[text,paragraph]")
+                callArgs[0].includes("based on expression \"(block | figure)+\"") && 
+                callArgs[0].includes("[text,paragraph]") 
             );
             expect(nodeCreationWarningFound).toBe(true);
         });
         it('should parse <p><div>Block inside P</div></p> and warn on schema validation', () => {
-            const html = '<p><div>Block inside P</div></p>';
-            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const html = '<p><div>Block inside P</div></p>'; 
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html; 
             parser.parse(tempDiv);
-            expect(consoleWarnSpy).toHaveBeenCalled();
+            expect(consoleWarnSpy).toHaveBeenCalled(); 
             const docContentWarningFound = consoleWarnSpy.mock.calls.some(callArgs => typeof callArgs[0] === 'string' && ( callArgs[0].includes("Schema validation failed for content of root DOC node.") || callArgs[0].includes("Invalid content for node type doc:") ) && callArgs.some((arg: any) => typeof arg === 'string' && arg.includes("(block | figure)+")));
             expect(docContentWarningFound).toBe(true);
         });
         it('should parse empty input string to empty doc content', () => {
             const tempDiv = document.createElement('div'); tempDiv.innerHTML = "";
             const resultDoc = parser.parse(tempDiv);
-            expect(getStructure(resultDoc)).toEqual({ type: 'doc' });
-            expect(consoleWarnSpy).toHaveBeenCalled();
+            expect(getStructure(resultDoc)).toEqual({ type: 'doc' }); 
+            expect(consoleWarnSpy).toHaveBeenCalled(); 
             const docRootWarningForEmpty = consoleWarnSpy.mock.calls.some(callArgs => typeof callArgs[0] === 'string' && callArgs[0].includes("Schema validation failed for content of root DOC node.") && typeof callArgs[2] === 'string' && callArgs[2].includes("(block | figure)+"));
             expect(docRootWarningForEmpty).toBe(true);
         });

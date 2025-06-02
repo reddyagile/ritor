@@ -1,6 +1,6 @@
 // src/transform/transaction.ts
 
-import { DocNode, BaseNode, Mark, MarkType } from '../documentModel.js';
+import { DocNode, BaseNode, Mark, MarkType } from '../documentModel.js'; 
 import { Schema } from '../schema.js';
 import { Step, StepResult } from './step.js';
 import { ReplaceStep } from './replaceStep.js';
@@ -8,16 +8,16 @@ import { Slice } from './slice.js';
 import { ModelSelection, ModelPosition } from '../selection.js';
 import { StepMap } from './stepMap.js';
 import { Mapping } from './mapping.js'; // Ensure Mapping is imported
-import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../modelUtils.js';
-import { AddMarkStep } from './addMarkStep.js';
-import { RemoveMarkStep } from './removeMarkStep.js';
+import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../modelUtils.js'; 
+import { AddMarkStep } from './addMarkStep.js'; 
+import { RemoveMarkStep } from './removeMarkStep.js'; 
 
 export class Transaction {
     public originalDoc: DocNode;
-    public doc: DocNode;
+    public doc: DocNode; 
     public steps: Step[] = [];
     private _mapping: Mapping; // Changed from maps: StepMap[]
-    public selection: ModelSelection;
+    public selection: ModelSelection; 
     private scrolledIntoView: boolean = false;
     private meta: Map<string, any> = new Map();
     public readonly schema: Schema;
@@ -39,24 +39,24 @@ export class Transaction {
 
     addStep(step: Step): this {
         const docBeforeStep = this.doc; // Document state before this step
-        const result = step.apply(docBeforeStep);
+        const result = step.apply(docBeforeStep); 
 
         if (result.failed) {
             console.warn("Failed to apply step:", result.failed, step);
             return this;
         }
         if (result.doc && result.map) {
-            this.doc = result.doc;
+            this.doc = result.doc; 
             this.steps.push(step);
             this._mapping = this._mapping.appendMap(result.map); // Append StepMap to Mapping
-
+            
             // Map existing selection through the new step's map.
             // The selection was relative to `docBeforeStep`.
             this.selection = this._mapSelection(this.selection, result.map, docBeforeStep);
         }
         return this;
     }
-
+    
     private _mapSelection(sel: ModelSelection, map: StepMap, docForFlatConversion: DocNode): ModelSelection {
         const newAnchor = this._mapPosition(sel.anchor, map, docForFlatConversion);
         const newHead = this._mapPosition(sel.head, map, docForFlatConversion);
@@ -64,7 +64,7 @@ export class Transaction {
     }
 
     private _mapPosition(pos: ModelPosition, map: StepMap, docForFlatConversion: DocNode): ModelPosition {
-        if (!pos) return pos;
+        if (!pos) return pos; 
 
         const flatInitial = modelPositionToFlatOffset(docForFlatConversion, pos, this.schema);
         const mappedFlat = map.map(flatInitial);
@@ -80,7 +80,7 @@ export class Transaction {
     replaceWith(from: number, to: number, node: BaseNode): this {
         return this.replace(from, to, Slice.fromFragment([node]));
     }
-
+    
     delete(from: number, to: number): this {
         return this.replace(from, to, Slice.empty);
     }
@@ -102,12 +102,12 @@ export class Transaction {
         this.scrolledIntoView = true;
         return this;
     }
-
+    
     get stepsApplied(): boolean {
         return this.steps.length > 0;
     }
 
-    get mapping(): Mapping {
+    get mapping(): Mapping { 
         return this._mapping;
     }
 

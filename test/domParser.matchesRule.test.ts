@@ -11,9 +11,9 @@ const domParser = new RitorDOMParser(schema); // Instance of our parser
 
 // Helper function to create mock HTMLElements
 const mockElement = (
-    tagName: string,
-    attrs: Record<string, string> = {},
-    classList: string[] = [],
+    tagName: string, 
+    attrs: Record<string, string> = {}, 
+    classList: string[] = [], 
     styles: Record<string, string> = {}
 ): HTMLElement => {
     const el = document.createElement(tagName);
@@ -68,7 +68,7 @@ describe('DOMParser.matchesRule', () => {
             expect(domParser.matchesRule(mockElement("input", { value: "bar" }), rule2)).toBe(true);
             expect(domParser.matchesRule(mockElement("input", { value: "baz" }), rule)).toBe(false);
         });
-
+        
         it('should match tag with attribute presence', () => {
             const rule: ParseRule = { tag: "div[data-type]" };
             expect(domParser.matchesRule(mockElement("div", { "data-type": "image" }), rule)).toBe(true);
@@ -127,7 +127,7 @@ describe('DOMParser.matchesRule', () => {
             // Manually set style for jsdom limitation if needed, or rely on getComputedStyle if it's smart
             // For <b>, browser's getComputedStyle(bElement).fontWeight would be "bold" or "700"
             // This test relies on the getComputedStyle fallback in matchesRule
-            expect(domParser.matchesRule(bElement, rule)).toBe(true);
+            expect(domParser.matchesRule(bElement, rule)).toBe(true); 
         });
 
         it('should match simple inline style (font-weight: 700 for bold)', () => {
@@ -138,7 +138,7 @@ describe('DOMParser.matchesRule', () => {
             // If not, it relies on getComputedStyle.
             expect(domParser.matchesRule(el, rule)).toBe(true);
         });
-
+        
         it('should match simple inline style (font-weight: normal)', () => {
             const rule: ParseRule = { style: "font-weight=normal" };
             expect(domParser.matchesRule(mockElement("span", {}, [], { fontWeight: "normal" }), rule)).toBe(true);
@@ -151,7 +151,7 @@ describe('DOMParser.matchesRule', () => {
             // Similar to <b>, relies on getComputedStyle fallback in matchesRule for <i>
             expect(domParser.matchesRule(iElement, rule)).toBe(true);
         });
-
+        
          it('should match simple inline style (font-style: oblique for italic)', () => {
             const rule: ParseRule = { style: "font-style=italic" };
             const el = mockElement("span", {}, [], { fontStyle: "oblique" });
@@ -183,7 +183,7 @@ describe('DOMParser.matchesRule', () => {
              // Element is a span, but has italic style. matchesRule should return false as tag mismatches.
             expect(domParser.matchesRule(mockElement("span", {}, [], { fontStyle: "italic" }), rule)).toBe(false);
         });
-
+        
         it('should check style if tag is not present in rule', () => {
             const rule: ParseRule = { style: "font-style=italic" };
             expect(domParser.matchesRule(mockElement("span", {}, [], { fontStyle: "italic" }), rule)).toBe(true);

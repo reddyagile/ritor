@@ -1,21 +1,21 @@
 // test/contentExpression.test.ts
 
-import { Schema, NodeType } from '../src/schema.js';
+import { Schema, NodeType } from '../src/schema.js'; 
 import { NodeSpec } from '../src/schemaSpec.js';
 import { BaseNode, TextNode } from '../src/documentModel.js';
 
 // Disable debug logging for checkContent for final run
-(globalThis as any).DEBUG_CHECK_CONTENT = false;
+(globalThis as any).DEBUG_CHECK_CONTENT = false; 
 
 // Basic schema setup for testing
 const testNodeSpecs: { [name: string]: NodeSpec } = {
     doc: { content: "block+" },
     paragraph: { group: "block", content: "inline*" },
     heading: { group: "block", content: "inline*" },
-    image: { group: "block", atom: true },
-    text: { group: "inline" },
-    hard_break: { group: "inline", atom: true },
-    list_item: { group: "block", content: "paragraph" },
+    image: { group: "block", atom: true }, 
+    text: { group: "inline" }, 
+    hard_break: { group: "inline", atom: true }, 
+    list_item: { group: "block", content: "paragraph" }, 
     figure: { group: "block", content: "image figcaption?" },
     figcaption: { group: "block", content: "inline*" } // Changed from text* to inline* for consistency
 };
@@ -26,9 +26,9 @@ const createMockNode = (typeName: string, content?: BaseNode[]): BaseNode => {
     const type = testSchema.nodes[typeName];
     if (!type) throw new Error(`Unknown node type: ${typeName} in test setup`);
     return {
-        type, attrs: {}, marks: [], content: content || [], nodeSize: 0,
-        isLeaf: type.isLeafType,
-        isText: type.isTextType
+        type, attrs: {}, marks: [], content: content || [], nodeSize: 0, 
+        isLeaf: type.isLeafType, 
+        isText: type.isTextType 
     } as BaseNode;
 };
 
@@ -43,9 +43,9 @@ const figcap = (...content: BaseNode[]) => createMockNode("figcaption", content)
 
 describe('NodeType.checkContent', () => {
     describe('Simple Quantifiers and Names', () => {
-        it('paragraph (inline*)', () => {
+        it('paragraph (inline*)', () => { 
             const paraType = testSchema.nodes.paragraph;
-            expect(paraType.checkContent([])).toBe(true);
+            expect(paraType.checkContent([])).toBe(true); 
             expect(paraType.checkContent([txt()])).toBe(true);
             expect(paraType.checkContent([txt(), br(), txt()])).toBe(true);
         });
@@ -54,14 +54,14 @@ describe('NodeType.checkContent', () => {
             const docType = testSchema.nodes.doc;
             expect(docType.checkContent([p()])).toBe(true);
             expect(docType.checkContent([p(), h()])).toBe(true);
-            expect(docType.checkContent([])).toBe(false);
-            expect(docType.checkContent([txt()])).toBe(false);
+            expect(docType.checkContent([])).toBe(false); 
+            expect(docType.checkContent([txt()])).toBe(false); 
         });
 
         it('image (atom, effectively empty content)', () => {
             const imgType = testSchema.nodes.image;
-            expect(imgType.checkContent([])).toBe(true);
-            expect(imgType.checkContent([txt()])).toBe(false);
+            expect(imgType.checkContent([])).toBe(true); 
+            expect(imgType.checkContent([txt()])).toBe(false); 
         });
 
         it('heading (inline*)', () => {
@@ -74,23 +74,23 @@ describe('NodeType.checkContent', () => {
     describe('Sequences', () => {
         it('figure (image figcaption?)', () => {
             const figureType = testSchema.nodes.figure;
-            expect(figureType.checkContent([img(), figcap(txt())])).toBe(true);
-            expect(figureType.checkContent([img()])).toBe(true);
-            expect(figureType.checkContent([figcap(txt()), img()])).toBe(false);
-            expect(figureType.checkContent([img(), img()])).toBe(false);
-            expect(figureType.checkContent([figcap(txt())])).toBe(false);
-            expect(figureType.checkContent([img(), figcap(txt()), figcap(txt())])).toBe(false);
-            expect(figureType.checkContent([])).toBe(false);
+            expect(figureType.checkContent([img(), figcap(txt())])).toBe(true); 
+            expect(figureType.checkContent([img()])).toBe(true); 
+            expect(figureType.checkContent([figcap(txt()), img()])).toBe(false); 
+            expect(figureType.checkContent([img(), img()])).toBe(false); 
+            expect(figureType.checkContent([figcap(txt())])).toBe(false); 
+            expect(figureType.checkContent([img(), figcap(txt()), figcap(txt())])).toBe(false); 
+            expect(figureType.checkContent([])).toBe(false); 
         });
-         it('list_item (paragraph)', () => {
+         it('list_item (paragraph)', () => { 
             const liType = testSchema.nodes.list_item;
             expect(liType.checkContent([p(txt())])).toBe(true);
             expect(liType.checkContent([])).toBe(false);
-            expect(liType.checkContent([p(),p()])).toBe(false);
-            expect(liType.checkContent([h()])).toBe(false);
+            expect(liType.checkContent([p(),p()])).toBe(false); 
+            expect(liType.checkContent([h()])).toBe(false); 
         });
     });
-
+    
     describe('Choices and Groups (PoC Level)', () => {
         const choiceTestNodeSpec: NodeSpec = { content: "(paragraph | heading)+" };
         testSchema.nodes.choiceTestNode = new NodeType("choiceTestNode", choiceTestNodeSpec, testSchema);
@@ -102,9 +102,9 @@ describe('NodeType.checkContent', () => {
             expect(choiceType.checkContent([h(), p(), h()])).toBe(true);
             expect(choiceType.checkContent([p()])).toBe(true);
             expect(choiceType.checkContent([h()])).toBe(true);
-            expect(choiceType.checkContent([])).toBe(false);
-            expect(choiceType.checkContent([img()])).toBe(false);
-            expect(choiceType.checkContent([p(), img()])).toBe(false);
+            expect(choiceType.checkContent([])).toBe(false); 
+            expect(choiceType.checkContent([img()])).toBe(false); 
+            expect(choiceType.checkContent([p(), img()])).toBe(false); 
         });
 
         const groupTestNodeSpec: NodeSpec = { content: "block*" };
@@ -113,10 +113,10 @@ describe('NodeType.checkContent', () => {
         groupType._finalizeContentMatcher(); // Manually finalize
 
         it('groupTestNode (block*)', () => {
-            expect(groupType.checkContent([p(), h()])).toBe(true);
-            expect(groupType.checkContent([img()])).toBe(true);
-            expect(groupType.checkContent([])).toBe(true);
-            expect(groupType.checkContent([p(), txt()])).toBe(false);
+            expect(groupType.checkContent([p(), h()])).toBe(true); 
+            expect(groupType.checkContent([img()])).toBe(true);     
+            expect(groupType.checkContent([])).toBe(true);         
+            expect(groupType.checkContent([p(), txt()])).toBe(false); 
         });
     });
 
@@ -125,7 +125,7 @@ describe('NodeType.checkContent', () => {
             const docMatcher = testSchema.nodes.doc.contentMatcher;
             expect(docMatcher).toEqual([{ type: 'group', value: 'block', min: 1, max: Infinity }]);
         });
-
+        
         it('parses paragraph content "inline*" correctly', () => {
             const paraMatcher = testSchema.nodes.paragraph.contentMatcher;
             expect(paraMatcher).toEqual([{ type: 'group', value: 'inline', min: 0, max: Infinity }]);
@@ -138,15 +138,15 @@ describe('NodeType.checkContent', () => {
                 { type: 'name', value: 'figcaption', min: 0, max: 1 }
             ]);
         });
-
+        
         it('parses "(paragraph | heading)*" correctly (PoC choice)', () => {
             const choiceTestNodeSpecManual: NodeSpec = { content: "(paragraph | heading)*" };
             const nodeTypeForTest = new NodeType("manualChoiceTest", choiceTestNodeSpecManual, testSchema);
             nodeTypeForTest._finalizeContentMatcher(); // Manually finalize
             const choiceMatcher = nodeTypeForTest.contentMatcher;
             expect(choiceMatcher).toEqual([{
-                type: 'group',
-                value: 'choice(paragraph|heading)',
+                type: 'group', 
+                value: 'choice(paragraph|heading)', 
                 min: 0,
                 max: Infinity,
                 isChoice: true,

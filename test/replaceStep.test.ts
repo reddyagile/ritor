@@ -4,18 +4,18 @@ import { ReplaceStep } from '../src/transform/replaceStep.js';
 import { Slice } from '../src/transform/slice.js';
 import { Schema } from '../src/schema.js';
 import { basicNodeSpecs, basicMarkSpecs } from '../src/basicSchema.js';
-import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js';
+import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js'; 
 import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray } from '../src/modelUtils.js';
 import { Attrs, NodeSpec } from '../src/schemaSpec.js';
 
 
-(globalThis as any).DEBUG_REPLACESTEP = false;
-(globalThis as any).DEBUG_MATCHES_RULE = false;
+(globalThis as any).DEBUG_REPLACESTEP = false; 
+(globalThis as any).DEBUG_MATCHES_RULE = false; 
 (globalThis as any).DEBUG_CHECK_CONTENT = false;
 
-const schema = new Schema({
-    nodes: basicNodeSpecs,
-    marks: basicMarkSpecs
+const schema = new Schema({ 
+    nodes: basicNodeSpecs, 
+    marks: basicMarkSpecs 
 });
 
 // Helper functions
@@ -36,7 +36,7 @@ const getStructure = (node: BaseNode | null): any => {
     }
     const content = node.content ? node.content.map(getStructure) : [];
     const attrsToCompare = { ...node.attrs };
-    delete attrsToCompare.id;
+    delete attrsToCompare.id; 
     return { type: node.type.name, ...(Object.keys(attrsToCompare).length ? { attrs: attrsToCompare } : {}), ...(content.length ? { content } : {}) };
 };
 
@@ -57,8 +57,8 @@ describe('ReplaceStep.apply', () => {
     describe('Single-Block Inline Replacements (No Slice Opening)', () => {
         it('should replace text in the middle of a paragraph', () => {
             const initialDoc = createDoc(createPara(createText("Hello world!")));
-            const from = 7; const to = 12;
-            const slice = Slice.fromFragment([createText("Ritor")]);
+            const from = 7; const to = 12; 
+            const slice = Slice.fromFragment([createText("Ritor")]); 
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
             expect(result.failed).toBeUndefined();
@@ -66,8 +66,8 @@ describe('ReplaceStep.apply', () => {
         });
         it('should replace text across two text nodes within a paragraph', () => {
             const initialDoc = createDoc(createPara(createText("Hello "), createText("world!")));
-            const from = modelPositionToFlatOffset(initialDoc, { path: [0,0], offset: 4 }, schema);
-            const to = modelPositionToFlatOffset(initialDoc, { path: [0,1], offset: 3 }, schema);
+            const from = modelPositionToFlatOffset(initialDoc, { path: [0,0], offset: 4 }, schema); 
+            const to = modelPositionToFlatOffset(initialDoc, { path: [0,1], offset: 3 }, schema);   
             const slice = Slice.fromFragment([createText(" Ritor ")]);
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
@@ -136,13 +136,13 @@ describe('ReplaceStep.apply', () => {
 
         it('Test 4: Mark compatibility for merge (openStart=1, openEnd=1)', () => {
             const initialDoc = createDoc(createPara(
-                createText("AAA ", [{type: 'bold'}]),
+                createText("AAA ", [{type: 'bold'}]), 
                 createText("CCC", [{type: 'bold'}])
             ));
             // Target between "AAA " (bold) and "CCC" (bold)
             const from = modelPositionToFlatOffset(initialDoc, { path: [0, 0], offset: 4 }, schema);
             const to = from;
-
+            
             const slice = new Slice([createText("BBB", [{type: 'bold'}])], 1, 1);
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
@@ -156,12 +156,12 @@ describe('ReplaceStep.apply', () => {
 
         it('Test 5: Mark incompatibility prevents merge (openStart=1, openEnd=1)', () => {
             const initialDoc = createDoc(createPara(
-                createText("AAA ", [{type: 'bold'}]),
+                createText("AAA ", [{type: 'bold'}]), 
                 createText("CCC", [{type: 'italic'}])
             ));
             const from = modelPositionToFlatOffset(initialDoc, { path: [0, 0], offset: 4 }, schema); // After "AAA " (bold)
             const to = from;
-
+            
             const slice = new Slice([createText("BBB", [{type: 'bold'}])], 1, 1);
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
@@ -169,15 +169,15 @@ describe('ReplaceStep.apply', () => {
             expect(result.failed).toBeUndefined();
             // Expect: <p><strong>AAA BBB</strong><em>CCC</em></p>
             expect(getStructure(result.doc!)).toEqual(getStructure(createDoc(createPara(
-                createText("AAA BBB", [{type: 'bold'}]),
+                createText("AAA BBB", [{type: 'bold'}]), 
                 createText("CCC", [{type: 'italic'}])
             ))));
         });
 
         it('Insert with openStart into empty paragraph', () => {
             const initialDoc = createDoc(createPara(createText("")));
-            const from = 1; const to = 1;
-            const slice = new Slice([createText("Hello")], 1, 0);
+            const from = 1; const to = 1; 
+            const slice = new Slice([createText("Hello")], 1, 0); 
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
             expect(result.failed).toBeUndefined();
@@ -186,8 +186,8 @@ describe('ReplaceStep.apply', () => {
 
         it('Insert with openEnd at end of paragraph', () => {
             const initialDoc = createDoc(createPara(createText("Hello")));
-            const from = 1 + 5; const to = 1 + 5;
-            const slice = new Slice([createText(" World")], 0, 1);
+            const from = 1 + 5; const to = 1 + 5; 
+            const slice = new Slice([createText(" World")], 0, 1); 
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
             expect(result.failed).toBeUndefined();
@@ -196,9 +196,9 @@ describe('ReplaceStep.apply', () => {
 
         it('Replace content with an empty slice with openStart/openEnd > 0 should delete and merge if compatible', () => {
             const initialDoc = createDoc(createPara( createText("Start "), createText("Middle", [{type: 'bold'}]), createText(" End") ));
-            const from = modelPositionToFlatOffset(initialDoc, {path: [0,1], offset: 0}, schema);
-            const to = modelPositionToFlatOffset(initialDoc, {path: [0,1], offset: 6}, schema);
-            const slice = new Slice([], 1, 1);
+            const from = modelPositionToFlatOffset(initialDoc, {path: [0,1], offset: 0}, schema); 
+            const to = modelPositionToFlatOffset(initialDoc, {path: [0,1], offset: 6}, schema);   
+            const slice = new Slice([], 1, 1); 
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
             expect(result.failed).toBeUndefined();
@@ -210,12 +210,12 @@ describe('ReplaceStep.apply', () => {
         // ... (existing invert tests are kept) ...
         it('should invert a text replacement in the middle of a paragraph', () => {
             const initialDoc = createDoc(createPara(createText("Hello world!")));
-            const from = 7; const to = 12;
+            const from = 7; const to = 12; 
             const slice = Slice.fromFragment([createText("Ritor")]);
             const step = new ReplaceStep(from, to, slice);
             const result = step.apply(initialDoc);
             expect(result.doc).toBeDefined();
-            const invertedStep = step.invert(initialDoc);
+            const invertedStep = step.invert(initialDoc); 
             expect(invertedStep).not.toBeNull();
             const resultAfterInvert = (invertedStep! as ReplaceStep).apply(result.doc!);
             expect(resultAfterInvert.failed).toBeUndefined();
@@ -223,10 +223,10 @@ describe('ReplaceStep.apply', () => {
         });
         it('should invert deleting a full paragraph (PoC multi-block)', () => {
             const initialDoc = createDoc(createPara(createText("P1")), createPara(createText("P2-DEL")), createPara(createText("P3")));
-            const p1Size = schema.node(schema.nodes.paragraph, {}, [createText("P1")]).nodeSize;
-            const p2DelSize = schema.node(schema.nodes.paragraph, {}, [createText("P2-DEL")]).nodeSize;
-            const from = p1Size; const to = from + p2DelSize;
-            const step = new ReplaceStep(from, to, Slice.empty);
+            const p1Size = schema.node(schema.nodes.paragraph, {}, [createText("P1")]).nodeSize; 
+            const p2DelSize = schema.node(schema.nodes.paragraph, {}, [createText("P2-DEL")]).nodeSize; 
+            const from = p1Size; const to = from + p2DelSize;    
+            const step = new ReplaceStep(from, to, Slice.empty); 
             const result = step.apply(initialDoc);
             expect(result.failed).toBeUndefined();
             expect(getStructure(result.doc!)).toEqual(getStructure(createDoc(createPara(createText("P1")), createPara(createText("P3")))));

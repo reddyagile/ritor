@@ -27,21 +27,21 @@ function parseContentExpression(expression: string, schema: Schema): ContentMatc
             else if (lastChar === '?') { min = 0; max = 1; }
         }
 
-        if (part.startsWith('(') && part.endsWith(')')) {
+        if (part.startsWith('(') && part.endsWith(')')) { 
             const groupContent = part.slice(1, -1);
             const options = groupContent.split(/\s*\|\s*/).map(s => s.trim()).filter(s => s);
             if (options.length > 0) {
                 elements.push({
-                    type: 'group',
-                    value: `choice(${options.join('|')})`,
-                    min, max, isChoice: true, options: options
+                    type: 'group', 
+                    value: `choice(${options.join('|')})`, 
+                    min, max, isChoice: true, options: options 
                 });
             }
-        } else {
+        } else { 
             // Check against schema.groups *after* schema construction is complete.
             // During NodeType construction, schema.groups might not be fully populated yet.
             // This is why _finalizeContentMatcher is important.
-            const type = schema.nodes[part] ? 'name' : (schema.groups.get(part) ? 'group' : 'name');
+            const type = schema.nodes[part] ? 'name' : (schema.groups.get(part) ? 'group' : 'name'); 
             elements.push({ type, value: part, min, max });
         }
     }
@@ -51,19 +51,19 @@ function parseContentExpression(expression: string, schema: Schema): ContentMatc
 
 export class NodeType {
   public contentMatcher!: ContentMatcherElement[]; // Definite assignment via _finalizeContentMatcher
-  public readonly allowedMarks: Set<string> | null;
+  public readonly allowedMarks: Set<string> | null; 
   public readonly contentExpressionString: string; // Made public for logging
 
   constructor(
     public readonly name: string,
     public readonly spec: NodeSpec,
-    public readonly schema: Schema
+    public readonly schema: Schema 
   ) {
     this.contentExpressionString = spec.content || "";
     // this.contentMatcher is initialized by _finalizeContentMatcher() by the Schema constructor
-
-    if (spec.marks === "_") this.allowedMarks = null;
-    else if (spec.marks === "" || !spec.marks) this.allowedMarks = new Set();
+    
+    if (spec.marks === "_") this.allowedMarks = null; 
+    else if (spec.marks === "" || !spec.marks) this.allowedMarks = new Set(); 
     else this.allowedMarks = new Set(spec.marks.split(" "));
   }
 
@@ -75,7 +75,7 @@ export class NodeType {
   get isInline(): boolean { return !!this.spec.inline; }
   get isBlock(): boolean { return !this.spec.inline && this.name !== 'text'; }
   get isTextType(): boolean { return this.name === 'text'; }
-  get isLeafType(): boolean { return !!this.spec.atom; }
+  get isLeafType(): boolean { return !!this.spec.atom; }    
 
   checkContent(content: ReadonlyArray<ModelNode>): boolean {
     const DEBUG_CHECK_CONTENT = (globalThis as any).DEBUG_CHECK_CONTENT || false;
@@ -96,7 +96,7 @@ export class NodeType {
     for (const matcher of this.contentMatcher) {
         let matchCount = 0;
         if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]   Matcher: ${JSON.stringify(matcher)}, min: ${matcher.min}, max: ${matcher.max}`);
-
+        
         while (contentIndex < content.length) {
             const currentNode = content[contentIndex];
             let nodeMatchesCurrentMatcher = false;
@@ -106,12 +106,12 @@ export class NodeType {
                 if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]       Checking choice: ${matcher.options.join('|')}`);
                 for (const option of matcher.options) {
                     const optionIsNodeName = !!this.schema.nodes[option];
-
+                    
                     if (option === 'text' && currentNode.isText) { nodeMatchesCurrentMatcher = true; if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Option ${option} (conceptual group text) MATCHED`); break; }
                     else if (option === 'inline' && (currentNode.type.isInline || currentNode.isText)) { nodeMatchesCurrentMatcher = true; if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Option ${option} (conceptual group inline) MATCHED`); break; }
                     else if (option === 'block' && currentNode.type.isBlock) { nodeMatchesCurrentMatcher = true; if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Option ${option} (conceptual group block) MATCHED`); break; }
                     else if (optionIsNodeName && currentNode.type.name === option) { nodeMatchesCurrentMatcher = true; if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Option ${option} (name) MATCHED`); break;
-                    } else if (this.schema.groups.has(option) && currentNode.type.spec.group?.includes(option)) {
+                    } else if (this.schema.groups.has(option) && currentNode.type.spec.group?.includes(option)) { 
                         nodeMatchesCurrentMatcher = true; if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Option ${option} (schema group ${currentNode.type.spec.group}) MATCHED`); break;
                     }
                 }
@@ -132,13 +132,13 @@ export class NodeType {
                 if (matchCount >= matcher.max) { if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]         Match count ${matchCount} reached max ${matcher.max}. Breaking from content loop.`); break; }
             } else {
                 if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]       Node ${currentNode.type.name} did NOT MATCH matcher ${matcher.value || JSON.stringify(matcher.options)}. Breaking from content loop.`);
-                break;
+                break; 
             }
         }
 
         if (matchCount < matcher.min) {
             if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]   Matcher ${matcher.value || JSON.stringify(matcher.options)} FAILED: matchCount ${matchCount} < min ${matcher.min}. Final Result: false`);
-            return false;
+            return false; 
         }
         if (DEBUG_CHECK_CONTENT) console.log(`[checkContent]   Matcher ${matcher.value || JSON.stringify(matcher.options)} PASSED: matchCount ${matchCount} >= min ${matcher.min}`);
     }
@@ -148,21 +148,21 @@ export class NodeType {
   }
 
   public allowsMarkType(markType: MarkType | string): boolean { if (this.allowedMarks === null) return true; const markName = typeof markType === 'string' ? markType : markType.name; return this.allowedMarks.has(markName); }
-
-  public create(attrs?: Attrs, contentParam?: ReadonlyArray<ModelNode> | ModelNode, _marks?: ReadonlyArray<ModelAnyMark>): ModelNode {
+  
+  public create(attrs?: Attrs, contentParam?: ReadonlyArray<ModelNode> | ModelNode, _marks?: ReadonlyArray<ModelAnyMark>): ModelNode { 
     if (this.isTextType) throw new Error("Cannot use NodeType.create() for text nodes; use Schema.text() instead.");
     let finalAttrs = this.defaultAttrs(attrs);
     if (this.isBlock && (!finalAttrs || finalAttrs.id === undefined)) { finalAttrs = { ...finalAttrs, id: this.schema.generateNodeId() }; }
     const finalContentArray = Array.isArray(contentParam) ? contentParam : (contentParam ? [contentParam] : []);
     if (!this.checkContent(finalContentArray)) { console.warn(`Invalid content for node type ${this.name}: [${finalContentArray.map(n => n.type.name).join(', ')}] based on expression "${this.spec.content}".`);}
-    let calculatedContentSize = 0; for (const child of finalContentArray) calculatedContentSize += child.nodeSize;
+    let calculatedContentSize = 0; for (const child of finalContentArray) calculatedContentSize += child.nodeSize; 
     let calculatedNodeSize: number;
     if (this.name === this.schema.topNodeType.name) calculatedNodeSize = calculatedContentSize;
-    else if (this.isLeafType) calculatedNodeSize = 1;
-    else if (this.isBlock) calculatedNodeSize = 2 + calculatedContentSize;
-    else if (this.isInline && !this.isTextType) calculatedNodeSize = (finalContentArray.length > 0 ? (this.spec.toDOM ? 2 : 0) : 0) + calculatedContentSize;
+    else if (this.isLeafType) calculatedNodeSize = 1; 
+    else if (this.isBlock) calculatedNodeSize = 2 + calculatedContentSize; 
+    else if (this.isInline && !this.isTextType) calculatedNodeSize = (finalContentArray.length > 0 ? (this.spec.toDOM ? 2 : 0) : 0) + calculatedContentSize; 
     else { console.warn(`Node type ${this.name} fallback size calc.`); calculatedNodeSize = calculatedContentSize; }
-
+    
     const nodeObject: ModelNode = { type: this, attrs: finalAttrs, content: finalContentArray.length > 0 ? finalContentArray : [], nodeSize: calculatedNodeSize, isLeaf: this.isLeafType, isText: this.isTextType } as ModelNode;
     if (this.name === this.schema.topNodeType.name) { (nodeObject as any).contentSize = calculatedContentSize; }
     return nodeObject;
@@ -171,7 +171,7 @@ export class NodeType {
   public toDOM(node: ModelNode): DOMOutputSpec { if(this.spec.toDOM) return this.spec.toDOM(node); return this.isBlock ? ["div",0] : (this.isInline ? ["span",0] : ""); }
 }
 
-export class MarkType {
+export class MarkType { 
   constructor( public readonly name: string, public readonly spec: MarkSpec, public readonly schema: Schema ) {}
   public create(attrs?: Attrs): ModelAnyMark {
     const defaultedAttrs = this.defaultAttrs(attrs);
@@ -182,18 +182,18 @@ export class MarkType {
   public toDOM(mark: ModelAnyMark, inlineContent: boolean): DOMOutputSpec { if(this.spec.toDOM) return this.spec.toDOM(mark, inlineContent); return [this.name,0]; }
 }
 
-export class Schema {
+export class Schema { 
   public readonly nodes: { [name: string]: NodeType };
   public readonly marks: { [name: string]: MarkType };
-  public readonly topNodeType: NodeType;
+  public readonly topNodeType: NodeType; 
   private nodeIdCounter: number = 1;
-  public readonly groups: Map<string, NodeType[]>;
+  public readonly groups: Map<string, NodeType[]>; 
 
   constructor(config: { nodes: { [name: string]: NodeSpec }; marks: { [name: string]: MarkSpec }; }) {
     this.nodes = {}; this.marks = {}; this.groups = new Map();
     for (const name in config.nodes) this.nodes[name] = new NodeType(name, config.nodes[name], this);
     for (const name in config.marks) this.marks[name] = new MarkType(name, config.marks[name], this);
-
+    
     for (const name in this.nodes) {
         const nodeType = this.nodes[name];
         if (nodeType.spec.group) { nodeType.spec.group.split(" ").forEach(groupName => { if (!this.groups.has(groupName)) this.groups.set(groupName, []); this.groups.get(groupName)!.push(nodeType); }); }
@@ -220,11 +220,11 @@ export class Schema {
   public text(text: string, marks?: ReadonlyArray<ModelAnyMark>): ModelTextNode {
     const textNodeType = this.nodes.text;
     if (!textNodeType) throw new Error("Text node type not defined in schema");
-    const defaultedAttrs = textNodeType.defaultAttrs(null);
+    const defaultedAttrs = textNodeType.defaultAttrs(null); 
     return {
-      type: textNodeType, attrs: defaultedAttrs, text: text, marks: marks || [],
-      nodeSize: text.length, isText: true, isLeaf: false, content: [],
-    } as unknown as ModelTextNode;
+      type: textNodeType, attrs: defaultedAttrs, text: text, marks: marks || [], 
+      nodeSize: text.length, isText: true, isLeaf: false, content: [], 
+    } as unknown as ModelTextNode; 
   }
   public generateNodeId(): string { return `ritor-node-${this.nodeIdCounter++}`; }
   public createDoc(content: ReadonlyArray<ModelNode>): ModelNode { return this.topNodeType.create(null, content); }
