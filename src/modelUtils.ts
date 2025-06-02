@@ -188,4 +188,40 @@ export function sliceDocByFlatOffsets(doc: DocNode, fromFlat: number, toFlat: nu
     console.warn(`sliceDocByFlatOffsets: Unhandled complex case or invalid range. From: ${fromFlat}, To: ${toFlat}`); return Slice.empty;
 }
 
+export function isPositionAtStartOfBlockContent(
+    doc: DocNode,
+    cursorPos: ModelPosition,
+    blockNodePath: number[], // Path to the block node in question
+    schema: Schema
+): boolean {
+    if (!cursorPos || !blockNodePath) return false;
+
+    const blockNode = nodeAtPath(doc, blockNodePath);
+    if (!blockNode || blockNode.isLeaf) return false; // Not a block or not a content-holding block
+
+    const cursorPosFlat = modelPositionToFlatOffset(doc, cursorPos, schema);
+
+    let blockNodeStartFlat = 0;
+    let currentParentNode: BaseNode = doc;
+    for (let i = 0; i < blockNodePath.length; i++) {
+        const idx = blockNodePath[i];
+        if (!currentParentNode.content || idx >= currentParentNode.content.length) {
+            return false; 
+        }
+        for (let j = 0; j < idx; j++) {
+            blockNodeStartFlat += currentParentNode.content[j].nodeSize;
+        }
+        currentParentNode = currentParentNode.content[idx];
+        if (i < blockNodePath.length -1) { 
+             if(!currentParentNode.isText && !currentParentNode.isLeaf) blockNodeStartFlat += 1;
+        }
+    }
+    // blockNodeStartFlat is now the position *before* the target blockNode in its parent's content list (flat offset terms)
+    // Add 1 for its opening tag to get to the start of its content, if it's not the doc itself.
+    const startOfBlockContentFlat = blockNodePath.length === 0 ? 0 : blockNodeStartFlat + 1;
+    
+    return cursorPosFlat === startOfBlockContentFlat;
+}
+
+
 console.log("modelUtils.ts updated: getText moved here, replaceNodeAtPath signature changed, sliceDocByFlatOffsets refined.");

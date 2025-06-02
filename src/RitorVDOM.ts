@@ -249,9 +249,82 @@ export class RitorVDOM {
           if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
         } else { // Collapsed selection
           if (flatAnchor === 0) return; // Cannot delete before start of doc
-          tr.delete(flatAnchor - 1, flatAnchor);
-          newCursorPos = flatOffsetToModelPosition(tr.doc, flatAnchor - 1, schema);
-          if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+
+          const modelAnchorPos = flatOffsetToModelPosition(doc, flatAnchor, schema);
+          let blockPath: number[] | null = null;
+          let currentBlockNode: BaseNode | null = null;
+          let blockNodeIndex = -1;
+
+          if (modelAnchorPos && modelAnchorPos.path.length > 0) {
+            // If path points to text node, block path is parent. If points to block (e.g. empty para), it's that path.
+            const nodeAtPos = nodeAtPath(doc, modelAnchorPos.path);
+            if (nodeAtPos?.isText) {
+              blockPath = modelAnchorPos.path.slice(0, -1);
+            } else if (nodeAtPos?.type.isBlock) { // Should not happen if cursor is "in" a block.
+              blockPath = modelAnchorPos.path;
+            }
+            if (blockPath && blockPath.length > 0) { // Top-level blocks are children of doc
+                currentBlockNode = nodeAtPath(doc, blockPath);
+                blockNodeIndex = blockPath[blockPath.length-1]; // This is index in parent (doc.content)
+            } else if (blockPath && blockPath.length === 0 && nodeAtPos?.type.name === 'doc') {
+                // This means modelAnchorPos.path pointed to the doc node itself.
+                // This shouldn't happen for a cursor inside a deletable block.
+                // Or if modelAnchorPos.path was empty, meaning cursor in doc, offset based.
+                // This needs careful check for what modelAnchorPos looks like for cursor in first child of doc.
+                // For now, assume blockPath will be established if cursor is in a block.
+            }
+          }
+          
+          // Ensure blockPath is relative to doc.content for blockNodeIndex
+          if (blockPath && blockPath.length !== 1 && currentBlockNode) { 
+            // If blockPath is deeper, e.g. [0,0] for li in ul, this simple merge won't work.
+            // For now, only merge top-level blocks.
+            console.warn("Block merging currently only supports top-level blocks.");
+            currentBlockNode = null; // Disable merge for nested blocks for now
+          }
+
+
+          if (currentBlockNode && currentBlockNode.type.isBlock && blockPath && blockNodeIndex > 0 &&
+              this.modelUtils.isPositionAtStartOfBlockContent(doc, modelAnchorPos!, blockPath, schema)) {
+            
+            const prevBlockPath = [blockNodeIndex - 1];
+            const prevBlock = nodeAtPath(doc, prevBlockPath);
+
+            if (prevBlock && prevBlock.type.isTextBlock && currentBlockNode.type.isTextBlock && prevBlock.content && currentBlockNode.content) {
+              // Perform Merge
+              const prevBlockContent = prevBlock.content as ReadonlyArray<BaseNode>;
+              const currentBlockContent = currentBlockNode.content as ReadonlyArray<BaseNode>;
+              
+              // Store original length of prevBlock's content for cursor positioning
+              let originalPrevBlockContentLength = 0;
+              for(const node of prevBlockContent) originalPrevBlockContentLength += node.nodeSize;
+
+
+              const mergedInlineContent = normalizeInlineArray([...prevBlockContent, ...currentBlockContent], schema);
+              const newPrevBlock = schema.node(prevBlock.type, prevBlock.attrs, mergedInlineContent);
+              
+              const startOfPrevBlockFlat = modelPositionToFlatOffset(doc, { path: prevBlockPath, offset: 0 }, schema);
+              // End of current block: start of current block + its nodeSize
+              const startOfCurrentBlockFlat = modelPositionToFlatOffset(doc, { path: blockPath, offset: 0 }, schema);
+              const endOfCurrentBlockFlat = startOfCurrentBlockFlat + currentBlockNode.nodeSize;
+
+              tr.replace(startOfPrevBlockFlat, endOfCurrentBlockFlat, Slice.fromFragment([newPrevBlock]));
+              
+              // New cursor position: at the end of what was originally prevBlock's content
+              const newCursorFlatPos = startOfPrevBlockFlat + 1 /* open tag for newPrevBlock */ + originalPrevBlockContentLength;
+              newCursorPos = flatOffsetToModelPosition(tr.doc, newCursorFlatPos, schema);
+              if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+
+            } else { // Not mergeable types or no content, fallback to char delete
+              tr.delete(flatAnchor - 1, flatAnchor);
+              newCursorPos = flatOffsetToModelPosition(tr.doc, flatAnchor - 1, schema);
+              if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+            }
+          } else { // Not at start of a mergeable block, or it's the first block
+            tr.delete(flatAnchor - 1, flatAnchor);
+            newCursorPos = flatOffsetToModelPosition(tr.doc, flatAnchor - 1, schema);
+            if (newCursorPos) tr.setSelection({ anchor: newCursorPos, head: newCursorPos });
+          }
         }
         break;
 

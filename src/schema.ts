@@ -76,6 +76,7 @@ export class NodeType {
   get isBlock(): boolean { return !this.spec.inline && this.name !== 'text'; }
   get isTextType(): boolean { return this.name === 'text'; }
   get isLeafType(): boolean { return !!this.spec.atom; }    
+  get isTextBlock(): boolean { return !!this.spec.content && (this.spec.content.includes("inline") || this.spec.content.includes("text")); }
 
   checkContent(content: ReadonlyArray<ModelNode>): boolean {
     const DEBUG_CHECK_CONTENT = (globalThis as any).DEBUG_CHECK_CONTENT || false;
