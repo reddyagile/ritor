@@ -223,5 +223,70 @@ export function isPositionAtStartOfBlockContent(
     return cursorPosFlat === startOfBlockContentFlat;
 }
 
+// Comparison utils - moved from DomPatcher and adapted
+import { Attrs } from './schemaSpec.js'; // For areAttrsEqual
 
-console.log("modelUtils.ts updated: getText moved here, replaceNodeAtPath signature changed, sliceDocByFlatOffsets refined.");
+export function areAttrsEqual(attrsA: Attrs | undefined, attrsB: Attrs | undefined): boolean {
+  if (attrsA === attrsB) return true;
+  if (!attrsA || !attrsB) return false;
+
+  const keysA = Object.keys(attrsA);
+  const keysB = Object.keys(attrsB);
+
+  if (keysA.length !== keysB.length) return false;
+
+  for (const key of keysA) {
+    // Ensure id is handled if it can be of different types or needs specific comparison
+    if (key === 'id' && attrsA.id !== attrsB.id) return false; 
+    else if (attrsA[key] !== attrsB[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function areNodesEffectivelyEqual(nodeA: BaseNode | null, nodeB: BaseNode | null): boolean {
+    if (nodeA === nodeB) return true; 
+    if (!nodeA || !nodeB) return false;
+    if (nodeA.type !== nodeB.type) return false; 
+
+    // For attributes, explicitly ignore 'id' for comparison if it's auto-generated and not semantic content
+    const attrsA = { ...nodeA.attrs };
+    const attrsB = { ...nodeB.attrs };
+    // If IDs are not considered part of "effective equality" for content diffing, they can be deleted here.
+    // delete attrsA.id; 
+    // delete attrsB.id;
+    // However, if ID is a semantic attribute (e.g. for linking, like a heading ID), it should be compared.
+    // For now, areAttrsEqual will compare all, including ID. If this causes issues in diffing,
+    // we might need a version of areAttrsEqual that can ignore certain keys.
+
+    if (!areAttrsEqual(attrsA, attrsB)) return false;
+
+    if (nodeA.isText && !nodeA.isLeaf) { 
+      const textNodeA = nodeA as TextNode; 
+      const textNodeB = nodeB as TextNode;
+      if (textNodeA.text !== textNodeB.text) return false;
+      if (!marksEq(textNodeA.marks || [], textNodeB.marks || [])) return false;
+      return true;
+    }
+
+    if (nodeA.type.spec.atom) { 
+        return true; 
+    }
+
+    if (nodeA.content && nodeB.content) {
+        if (nodeA.content === nodeB.content) return true; 
+        if (nodeA.content.length !== nodeB.content.length) return false;
+        for (let i = 0; i < nodeA.content.length; i++) {
+          if (!areNodesEffectivelyEqual(nodeA.content[i], nodeB.content[i])) return false;
+        }
+        return true; 
+    } else if (nodeA.content || nodeB.content) { 
+        return false;
+    }
+    
+    return true;
+}
+
+
+console.log("modelUtils.ts updated: getText moved here, replaceNodeAtPath signature changed, sliceDocByFlatOffsets refined, added comparison utils.");
