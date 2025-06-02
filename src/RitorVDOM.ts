@@ -1,10 +1,11 @@
 // src/RitorVDOM.ts
-import { Schema } from './schema.js';
+import { Schema, NodeType as RitorNodeType } from './schema.js'; // Renamed NodeType to RitorNodeType to avoid conflict
 import { DocNode, BaseNode, TextNode, InlineNode, Mark } from './documentModel.js';
 import { DomPatcher } from './domPatcher.js';
-import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray, nodeAtPath, findTextNodesInRange, replaceNodeAtPath } from './modelUtils.js';
+import { modelPositionToFlatOffset, flatOffsetToModelPosition, normalizeInlineArray, nodeAtPath, findTextNodesInRange, replaceNodeAtPath, isPositionAtStartOfBlockContent, areNodesEffectivelyEqual } from './modelUtils.js'; // Added isPositionAtStartOfBlockContent and areNodesEffectivelyEqual
 import { ModelPosition, ModelSelection } from './selection.js';
 import { UndoManager } from './undoManager.js';
+import { diffFragment } from './transform/diff.js'; // Added diffFragment import
 import { basicNodeSpecs, basicMarkSpecs } from './basicSchema.js';
 import { DOMParser as RitorDOMParser } from './domParser.js';
 import { Transaction } from './transform/transaction.js';
@@ -279,13 +280,13 @@ export class RitorVDOM {
           if (blockPath && blockPath.length !== 1 && currentBlockNode) { 
             // If blockPath is deeper, e.g. [0,0] for li in ul, this simple merge won't work.
             // For now, only merge top-level blocks.
-            console.warn("Block merging currently only supports top-level blocks.");
+            // console.warn("Block merging currently only supports top-level blocks."); // Keep console.warn for now
             currentBlockNode = null; // Disable merge for nested blocks for now
           }
 
 
           if (currentBlockNode && currentBlockNode.type.isBlock && blockPath && blockNodeIndex > 0 &&
-              this.modelUtils.isPositionAtStartOfBlockContent(doc, modelAnchorPos!, blockPath, schema)) {
+              isPositionAtStartOfBlockContent(doc, modelAnchorPos!, blockPath, schema)) { // Removed this.modelUtils
             
             const prevBlockPath = [blockNodeIndex - 1];
             const prevBlock = nodeAtPath(doc, prevBlockPath);
@@ -377,16 +378,168 @@ export class RitorVDOM {
   }
   
   private getModelPathFromDomNode(domNode: Node | null): number[] | null { /* ... as before ... */ if (!domNode) return null; const path: number[] = []; let cDN: Node | null = domNode; while(cDN && cDN !== this.targetElement){ const pN=cDN.parentNode; if(!pN) return null; const idx=Array.from(pN.childNodes).indexOf(cDN as ChildNode); if(idx===-1)return null; path.unshift(idx); cDN=pN; } return cDN===this.targetElement?path:null;}
-  private findClosestBlockParentInfo(domNode: Node | null): { element: HTMLElement, path: number[] } | null { /* ... as before ... */ let curr:Node|null=domNode; while(curr&&curr!==this.targetElement){if(curr.nodeType===Node.ELEMENT_NODE){const el=curr as HTMLElement; if(el.id&&el.id.startsWith('ritor-node-')){const pth=this.getModelPathFromDomNode(el); if(pth)return{element:el,path:pth};}else if(this.schema.nodes[el.nodeName.toLowerCase()]?.isBlock){const pth=this.getModelPathFromDomNode(el); if(pth)return{element:el,path:pth};}} curr=curr.parentNode;} return null;}
-  private areDocsEffectivelyEqual(docA: DocNode, docB: DocNode): boolean { /* ... as before ... */ if(docA.content.length!==docB.content.length)return false; return JSON.stringify(docA)===JSON.stringify(docB);}
-  private handleMutations(mutations: MutationRecord[]): void { /* ... as before, with Promise.resolve().then() ... */ 
-    if(this.isProcessingMutations||this.isComposing)return; this.isProcessingMutations=true;
-    let changedBlockInfo:{element:HTMLElement,path:number[]}|null=null; let fullResyncNeeded=false;
-    for(const mut of mutations){if(mut.type==='attributes'&&mut.target===this.targetElement)continue; const pBI=this.findClosestBlockParentInfo(mut.target); if(pBI){if(!changedBlockInfo||pBI.path.length<changedBlockInfo.path.length)changedBlockInfo=pBI;}else{fullResyncNeeded=true;break;} if(mut.type==='childList'&&(mut.addedNodes.length>0||mut.removedNodes.length>0)){Array.from(mut.addedNodes).concat(Array.from(mut.removedNodes)).forEach(n=>{if(n.nodeType===Node.ELEMENT_NODE&&this.schema.nodes[(n as HTMLElement).nodeName.toLowerCase()]?.isBlock)fullResyncNeeded=true;}); if(mut.target===this.targetElement)fullResyncNeeded=true;} if(fullResyncNeeded)break;}
-    if(!changedBlockInfo&&mutations.length>0&&!fullResyncNeeded){if(mutations.length===1&&mutations[0].target.nodeType===Node.ELEMENT_NODE){const bI=this.findClosestBlockParentInfo(mutations[0].target); if(bI)changedBlockInfo=bI; else fullResyncNeeded=true;}else fullResyncNeeded=true;}
-    Promise.resolve().then(()=>{if(fullResyncNeeded){console.warn("RitorVDOM: Full DOM re-parse from complex mutations."); const nMNs=this.domParser.parseFragment(this.targetElement); const nDC:BaseNode[]=[]; let cIG:InlineNode[]=[]; for(const n of nMNs){if(n.type.isBlock){if(cIG.length>0){nDC.push(this.schema.nodes.paragraph.create(null,normalizeInlineArray(cIG,this.schema))); cIG=[];} nDC.push(n);}else cIG.push(n as InlineNode);} if(cIG.length>0)nDC.push(this.schema.nodes.paragraph.create(null,normalizeInlineArray(cIG,this.schema))); const nD=this.schema.node(this.schema.nodes.doc,this.currentViewDoc.attrs,nDC)as DocNode; if(nD&&!this.areDocsEffectivelyEqual(this.currentViewDoc,nD)){this.undoManager.add(this.currentViewDoc); this.updateDocument(nD);}else this.isProcessingMutations=false; return;}
-    if(changedBlockInfo){const{element:dCBE,path:mBP}=changedBlockInfo; const oMB=nodeAtPath(this.currentViewDoc,mBP); if(!oMB||oMB.isLeafType){console.error("Mutation handler: No model block or is leaf.",mBP); this.isProcessingMutations=false; return;} const nPINs=this.domParser.parseFragment(dCBE); const nNIC=normalizeInlineArray(nPINs as InlineNode[],this.schema); const nMBlk=this.schema.node(oMB.type,oMB.attrs,nNIC,oMB.marks); const nD=replaceNodeAtPath(this.currentViewDoc,mBP,nMBlk,this.schema)as DocNode|null; if(nD&&!this.areDocsEffectivelyEqual(this.currentViewDoc,nD)){this.undoManager.add(this.currentViewDoc); this.updateDocument(nD);}else this.isProcessingMutations=false; return;}
-    this.isProcessingMutations=false;}).catch(e=>{console.error("Error in mutation handling:",e); this.isProcessingMutations=false;});
+  private findClosestBlockParentInfo(domNode: Node | null): { element: HTMLElement, path: number[], node: BaseNode } | null {
+    let curr: Node | null = domNode;
+    while (curr && curr !== this.targetElement) {
+        if (curr.nodeType === Node.ELEMENT_NODE) {
+            const el = curr as HTMLElement;
+            const elName = el.nodeName.toLowerCase();
+            // Check if ID indicates a Ritor-managed block node
+            if (el.id && el.id.startsWith('ritor-node-')) {
+                const modelPath = this.getModelPathFromDomNode(el); // This needs to be robust
+                if (modelPath) {
+                    const modelNode = nodeAtPath(this.currentViewDoc, modelPath);
+                    if (modelNode) return { element: el, path: modelPath, node: modelNode };
+                }
+            }
+            // Fallback: check if tag name is a known block type (less reliable if no IDs)
+            const nodeType = this.schema.nodes[elName];
+            if (nodeType?.isBlock) {
+                const modelPath = this.getModelPathFromDomNode(el);
+                if (modelPath) {
+                    const modelNode = nodeAtPath(this.currentViewDoc, modelPath);
+                    if (modelNode) return { element: el, path: modelPath, node: modelNode };
+                }
+            }
+        }
+        curr = curr.parentNode;
+    }
+    return null;
+  }
+
+  private areDocsEffectivelyEqual(docA: DocNode, docB: DocNode): boolean { 
+      // This now uses the utility from modelUtils
+      return areNodesEffectivelyEqual(docA, docB);
+  }
+
+  private ensureBlocksAtTopLevel(nodes: BaseNode[]): BaseNode[] {
+    const result: BaseNode[] = [];
+    let currentInlineGroup: InlineNode[] = [];
+    for (const node of nodes) {
+        if (node.type.isBlock) {
+            if (currentInlineGroup.length > 0) {
+                result.push(this.schema.nodes.paragraph.create(null, normalizeInlineArray(currentInlineGroup, this.schema)));
+                currentInlineGroup = [];
+            }
+            result.push(node);
+        } else { // Inline or Text node
+            currentInlineGroup.push(node as InlineNode);
+        }
+    }
+    if (currentInlineGroup.length > 0) {
+        result.push(this.schema.nodes.paragraph.create(null, normalizeInlineArray(currentInlineGroup, this.schema)));
+    }
+    return result;
+  }
+
+  private handleMutations(mutations: MutationRecord[]): void {
+    if (this.isProcessingMutations || this.isComposing) return;
+    this.isProcessingMutations = true;
+    let mutationsProcessedThisTurn = false;
+
+    // Simplified logic: Try to find a single changed block first.
+    // More complex mutation patterns will trigger full resync.
+    let changedBlockInfo: { element: HTMLElement, path: number[], node: BaseNode } | null = null;
+    let fullResyncNeeded = false;
+
+    for (const mut of mutations) {
+        if (mut.type === 'attributes' && mut.target === this.targetElement) continue; // Ignore root attributes
+        
+        const blockInfo = this.findClosestBlockParentInfo(mut.target);
+        if (blockInfo) {
+            if (!changedBlockInfo) { // First identified block
+                changedBlockInfo = blockInfo;
+            } else if (changedBlockInfo.path.join(',') !== blockInfo.path.join(',')) {
+                // Mutation spans multiple known blocks or is outside a single identifiable block
+                fullResyncNeeded = true;
+                break;
+            }
+        } else { // Mutation target not within a known block structure
+            fullResyncNeeded = true;
+            break;
+        }
+        // If childList changes involve adding/removing Ritor block nodes, also trigger full resync
+        if (mut.type === 'childList') {
+             const affectedNodes = [...Array.from(mut.addedNodes), ...Array.from(mut.removedNodes)];
+             if (affectedNodes.some(n => n.nodeType === Node.ELEMENT_NODE && this.findClosestBlockParentInfo(n))) {
+                 // If a Ritor block node was added/removed, it's safer to resync the whole content for now
+                 fullResyncNeeded = true;
+                 break;
+             }
+        }
+    }
+    if (mutations.length > 0 && !changedBlockInfo && !fullResyncNeeded) { // No specific block found, but mutations exist
+        fullResyncNeeded = true;
+    }
+
+
+    Promise.resolve().then(() => {
+        if (fullResyncNeeded) {
+            console.warn("RitorVDOM: Performing full DOM re-parse and diff due to complex/block-level mutations.");
+            const parsedResult = this.domParser.parseFragment(this.targetElement, this.schema.nodes.doc);
+            const newDocContentNodesUnwrapped = parsedResult.nodes;
+            const newDocContentNodes = this.ensureBlocksAtTopLevel(newDocContentNodesUnwrapped);
+            
+            const steps = diffFragment(this.currentViewDoc.content, newDocContentNodes, 0, this.schema);
+
+            if (steps.length > 0) {
+                this.updateModelSelectionState();
+                const tr = new Transaction(this.currentViewDoc, this.currentModelSelection);
+                steps.forEach(step => tr.addStep(step));
+                if (!areNodesEffectivelyEqual(this.currentViewDoc, tr.doc)) {
+                    this.undoManager.add(this.currentViewDoc);
+                }
+                this.updateDocument(tr);
+            }
+            mutationsProcessedThisTurn = true;
+
+        } else if (changedBlockInfo) {
+            const { element: domChangedBlockElement, path: modelBlockPath, node: oldModelBlock } = changedBlockInfo;
+            if (oldModelBlock.isLeafType || !oldModelBlock.type.isTextBlock) { // was isLeafType
+                console.error("Mutation handler: Identified block is leaf or not a text block. Reverting to full sync for safety.", oldModelBlock.type.name);
+                // Fallback to full resync for this case.
+                // This could be triggered by mutations on e.g. an image block's wrapper.
+                // A more robust solution would be to diff based on the block type if it's an atom.
+                // For now, using the fullResyncNeeded path.
+                 fullResyncNeeded = true; // Trigger the above logic path
+                 // To avoid infinite loop if fullResyncNeeded path also fails, ensure we exit:
+                 if (this.isProcessingMutations) { // If already processing, this is a fallback from fallback
+                    this.isProcessingMutations = false;
+                    return;
+                 }
+                 this.handleMutations(mutations); // Re-call to go into full resync path.
+                 return;
+            }
+
+            const newParsedInlineNodesResult = this.domParser.parseFragment(domChangedBlockElement, oldModelBlock.type);
+            const normalizedNewInlineContent = normalizeInlineArray(newParsedInlineNodesResult.nodes as InlineNode[], this.schema);
+            const oldInlineContent = (oldModelBlock.content || []) as ReadonlyArray<BaseNode>;
+
+            const blockStartPos: ModelPosition = { path: modelBlockPath, offset: 0 };
+            const flatBlockStart = modelPositionToFlatOffset(this.currentViewDoc, blockStartPos, this.schema);
+            // +1 for opening tag of the block itself. Atom nodes have nodeSize 1 but no "content" in this sense.
+            const blockContentStartFlatOffset = flatBlockStart + (oldModelBlock.type.isLeafType ? 0 : 1); 
+
+            const steps = diffFragment(oldInlineContent, normalizedNewInlineContent, blockContentStartFlatOffset, this.schema);
+
+            if (steps.length > 0) {
+                this.updateModelSelectionState();
+                const tr = new Transaction(this.currentViewDoc, this.currentModelSelection);
+                steps.forEach(step => tr.addStep(step));
+                
+                if (!areNodesEffectivelyEqual(this.currentViewDoc, tr.doc)) {
+                     this.undoManager.add(this.currentViewDoc);
+                }
+                this.updateDocument(tr);
+            }
+            mutationsProcessedThisTurn = true;
+        }
+
+        this.isProcessingMutations = false;
+    }).catch(e => {
+        console.error("Error in mutation handling:", e);
+        this.isProcessingMutations = false;
+    });
   }
   public setFocus(): void { /* ... as before ... */ this.targetElement.focus(); if(this.currentModelSelection) this.applyModelSelectionToDom(this.currentModelSelection); else this.ensureInitialSelection(); }
   public undo(): void { /* ... as before ... */ const pS = this.undoManager.undo(); if (pS) this.updateDocument(pS); }
