@@ -36,7 +36,8 @@ export class ReplaceStep implements Step {
                 const defaultBlockType = schema.nodes.paragraph;
                 if (!defaultBlockType) return {failed: "Cannot wrap inline slice content: paragraph node type not found in schema."};
                 if (this.slice.content.every(n => n.type.spec.inline || n.isText)) {
-                    newContent = [defaultBlockType.create(null, this.slice.content)];
+                    const normalizedInline = normalizeInlineArray(this.slice.content as InlineNode[], schema);
+                    newContent = [defaultBlockType.create(null, normalizedInline)];
                 } else {
                     const processedSliceContent: BaseNode[] = []; let currentInlineGroup: InlineNode[] = [];
                     for (const node of this.slice.content) {
