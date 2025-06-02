@@ -55,9 +55,8 @@ export class DOMParser {
             lastDomChild = lastDomChild.previousSibling;
         }
         
-        const rawOpenStartDepth = this._calculateOpenDepth(firstDomChild, this.schema, true);
-        const openStart = this._calculateOpenDepth(firstDomChild, this.schema, true);
-        const openEnd = this._calculateOpenDepth(lastDomChild, this.schema, false);
+        const openStart = this._calculateOpenDepth(firstDomChild, this.schema, true); // Removed initialDepth from call
+        const openEnd = this._calculateOpenDepth(lastDomChild, this.schema, false); // Removed initialDepth from call
 
         return { nodes, openStart, openEnd };
     }
@@ -82,50 +81,40 @@ export class DOMParser {
     }
 
     private _calculateOpenDepth(domNode: globalThis.Node | null, schema: Schema, isStart: boolean): number {
-        // Removed one-time schema log, it was for diagnosing the schema object itself.
-        const nodeNameForLog = domNode ? (domNode as any).nodeName : 'null';
-        if (!domNode) {
-            return 0;
+        if (!domNode) return 0;
+        
+        // Whitespace-only text nodes or comments don't contribute to open depth from parent's perspective
+        if (domNode.nodeType === Node.COMMENT_NODE || (domNode.nodeType === Node.TEXT_NODE && !/\S/.test(domNode.textContent!))) {
+            return 0; 
         }
 
         if (domNode.nodeType === Node.TEXT_NODE) {
-            const hasContent = /\S/.test(domNode.textContent || "");
-            return hasContent ? 1 : 0;
+            return 1; // Non-empty text node implies its parent block is "open" by 1 level
         }
 
         if (domNode.nodeType === Node.ELEMENT_NODE) {
             const element = domNode as HTMLElement;
             const elementName = element.nodeName.toLowerCase();
-            
-            const actualNodeType = this._getNodeTypeForTag(elementName, schema); // Use helper
+            const actualNodeType = this._getNodeTypeForTag(elementName, schema);
 
-            // Check if it's a mark tag first (marks don't have NodeTypes but are inline)
-            // schema.marks is keyed by mark name (e.g. "strong"), which might match tag name.
-            if (schema.marks[elementName] && !(actualNodeType && actualNodeType.isBlock) ) { 
+            if (actualNodeType) { // Node type known by schema
+                if (actualNodeType.isBlock) return 0; // A block node itself is a closed boundary at this level
+                if (actualNodeType.isInline) return 1; // An inline node implies its parent block is open
+                if (actualNodeType === schema.nodes.text) return 1; // Schema's text type also implies open
+                return 0; // Other schema types (e.g. doc) are treated as closed boundaries
+            }
+
+            // Fallback: Is it a known mark tag? (Marks are inline)
+            if (schema.marks[elementName]) { 
                 return 1;
             }
-
-            if (actualNodeType) {
-                if (actualNodeType.isInline && !actualNodeType.isBlock) return 1; // Explicitly inline node type
-                if (actualNodeType.isBlock) { // Block node type
-                    const nextChild = isStart ? element.firstChild : element.lastChild;
-                    let childNodeToRecurse: globalThis.Node | null = nextChild;
-                    while(childNodeToRecurse && (childNodeToRecurse.nodeType === Node.COMMENT_NODE || (childNodeToRecurse.nodeType === Node.TEXT_NODE && !/\S/.test(childNodeToRecurse.textContent!)))) {
-                        childNodeToRecurse = isStart ? childNodeToRecurse.nextSibling : childNodeToRecurse.previousSibling;
-                    }
-                    const childDepth = this._calculateOpenDepth(childNodeToRecurse, schema, isStart);
-                    return 1 + childDepth;
-                }
-            }
             
-            // Fallback for generic HTML inline tags not explicitly defined in schema nodes or marks
+            // Fallback: Generic HTML inline tags
             if (['strong', 'em', 'b', 'i', 's', 'u', 'a', 'span', 'code', 'sub', 'sup', 'font', 'strike', 'del'].includes(elementName)) {
-                // Ensure this isn't a block node that happens to use a common inline tag (e.g. schema defines 'a' as a block)
-                if (!actualNodeType || !actualNodeType.isBlock) {
-                    return 1; 
-                }
+                return 1; 
             }
             
+            // All other unknown elements are treated as closed boundaries.
             return 0; 
         }
         return 0; 

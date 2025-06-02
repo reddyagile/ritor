@@ -181,8 +181,6 @@ describe('RitorDOMParser', () => {
             //     callArgs[0].includes("[text,paragraph]") 
             // );
             // expect(nodeCreationWarningFound).toBe(true);
-            // Temporarily skipping console check to focus on openStart/End
-            console.log("Skipping consoleWarnSpy check for 'should handle text directly in a div' temporarily.");
         });
         it('should parse <p><div>Block inside P</div></p> and warn on schema validation', () => {
             const html = '<p><div>Block inside P</div></p>'; 
