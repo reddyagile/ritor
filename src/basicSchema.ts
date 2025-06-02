@@ -205,17 +205,19 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
     parseDOM: [
         {tag: "strong"},
         {tag: "b"},
-        {style: "font-weight=bold"},
-        {style: "font-weight=700"}, // Order matters, more specific might go first if needed
+        // {style: "font-weight=bold"}, // Removed to prevent h1 from getting bold mark
+        {style: "font-weight=700"},
         {style: "font-weight=600"}
+        // To match "font-weight:bold" specifically on spans, use:
+        // {tag: "span", style: "font-weight=bold"}
     ]
   },
   italic: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["em", 0],
     parseDOM: [
         {tag: "i"},
-        {tag: "em"},
-        {style: "font-style=italic"}
+        {tag: "em"}
+        // {style: "font-style=italic"} // Remove to prevent e.g. <em> inside <i> from duplicating if styles are parsed too broadly
     ]
   },
   strikethrough: {
