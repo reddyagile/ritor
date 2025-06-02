@@ -19,15 +19,15 @@ export type DOMOutputSpec = [string, Attrs | 0, ...any[]] | [string, ...any[]] |
 // Forward declare DOMParser for ParseRule.getContent
 // We have to use 'any' here because DOMParser class is in a different file and imports this one.
 // This creates a circular dependency if we try to import DOMParser type directly.
-export type DOMParser = any;
+export type DOMParserInstance = any;
 
 export interface ParseRule {
   tag?: string; // e.g., "p", "li", "a[href]" (simple tags first, then selectors)
   style?: string; // e.g., "font-weight=bold" (key=value)
+  context?: string; // e.g., "list_item/" or "blockquote/paragraph/"
   // priority?: number;
   getAttrs?: (domNodeOrValue: HTMLElement | string) => Attrs | false | null | undefined;
-  getContent?: (domNode: HTMLElement, parser: DOMParser) => import('./documentModel.js').BaseNode[]; // Allow custom content parsing
-  // context?: string;
+  getContent?: (domNode: HTMLElement, parser: DOMParserInstance) => import('./documentModel.js').BaseNode[]; // Allow custom content parsing
   // Other conditions like node name, class, etc. could be added
 }
 // Removed the "| any" from ParseRule to make it more specific.

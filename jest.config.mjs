@@ -1,7 +1,7 @@
 // jest.config.mjs
 export default {
   preset: 'ts-jest/presets/default-esm', // Use ESM preset
-  testEnvironment: 'node',
+  testEnvironment: 'jsdom', // Changed to jsdom for DOM testing
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
