@@ -25,7 +25,7 @@ export interface ParseRule {
   tag?: string; // e.g., "p", "li", "a[href]" (simple tags first, then selectors)
   style?: string; // e.g., "font-weight=bold" (key=value)
   context?: string; // e.g., "list_item/" or "blockquote/paragraph/"
-  // priority?: number;
+  priority?: number; // Higher numbers typically mean higher priority. Default 50.
   getAttrs?: (domNodeOrValue: HTMLElement | string) => Attrs | false | null | undefined;
   getContent?: (domNode: HTMLElement, parser: DOMParserInstance) => import('./documentModel.js').BaseNode[]; // Allow custom content parsing
   // Other conditions like node name, class, etc. could be added

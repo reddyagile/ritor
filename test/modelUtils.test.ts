@@ -4,7 +4,7 @@ import { Schema } from '../src/schema.js';
 import { basicNodeSpecs, basicMarkSpecs } from '../src/basicSchema.js';
 import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js';
 import { ModelPosition } from '../src/selection.js';
-import { modelPositionToFlatOffset, flatOffsetToModelPosition } from '../src/modelUtils.js';
+import { modelPositionToFlatOffset, flatOffsetToModelPosition, sliceDocByFlatOffsets, getText } from '../src/modelUtils.js';
 
 // Helper to create a schema instance for tests
 const schema = new Schema({
@@ -239,5 +239,136 @@ describe('Position Conversion Utilities', () => {
         expect(flatOffsetToModelPosition(testDocInstance, 2)).toEqual({ path: [0,0], offset: 1 });
     });
 
+  });
+});
+
+describe('sliceDocByFlatOffsets', () => {
+  // Structure for test cases:
+  // [description, docFactory, fromFlat, toFlat, expectedContentFactory, expectedOpenStart, expectedOpenEnd]
+  type SliceTestCase = [
+    string, // description
+    () => DocNode, // docFactory
+    number, // fromFlat
+    number, // toFlat
+    () => BaseNode[], // expectedContentFactory: produces an array of nodes for the Slice's fragment
+    number, // expectedOpenStart
+    number // expectedOpenEnd
+  ];
+
+  const testCases: SliceTestCase[] = [
+    [
+      "Slice entire first paragraph from two",
+      () => doc(p(text("hello")), p(text("world"))),
+      // p("hello") -> 1(open) + 5(text) + 1(close) = 7
+      // doc node: p1(size 7) p2(size 7)
+      // Slice from just before p1 to just after p1
+      // This means from offset 0 in doc, to offset 1 in doc (selecting the first child)
+      // Flat: from 0 to 7
+      0, // fromFlat: Start of doc (implicitly before p1)
+      7, // toFlat: End of p1 (implicitly after p1's closing tag)
+      () => [p(text("hello"))], // Expected content is the full first paragraph
+      0, // openStart: Slice aligns with the start of p1
+      0  // openEnd: Slice aligns with the end of p1
+    ],
+    [
+      "Slice content of a single paragraph (partial text)",
+      () => doc(p(text("hello world"))),
+      // p("hello world") -> 1(p_open) + 11(text) + 1(p_close) = 13
+      // "hello world"
+      //  ^h: flat = 1 (after p_open)
+      //  ^e: flat = 2
+      //  ^l: flat = 3
+      //  ^l: flat = 4
+      //  ^o: flat = 5
+      // Slice "llo w"
+      // "llo": starts at flat offset 1+2=3 (after "he")
+      // "llo w": ends after "w", which is index 6. text "hello w". flat offset 1+7 = 8
+      1 + 2, // fromFlat: after "he" (h=1, e=2) -> start of 'l'
+      1 + 7, // toFlat: after "hello w" (h=1,e=2,l=3,l=4,o=5, =6,w=7) -> end of 'w'
+      () => [text("llo w")], // Expected content is just the text node
+      1, // openStart: The paragraph node 'p' is open at the start
+      1  // openEnd: The paragraph node 'p' is open at the end
+    ],
+    // TODO: Add more test cases:
+    // - Slicing across two paragraphs (e.g., end of p1 and start of p2)
+    // - Slicing involving nested structures (e.g., list items)
+    // - Slicing from document start into a paragraph
+    // - Slicing from mid-paragraph to document end
+    // - Empty slice (fromFlat === toFlat)
+    // - Slice an entire document
+    [
+      "Slice across two paragraphs (end of p1, start of p2)",
+      () => doc(p(text("one two")), p(text("three four"))),
+      // p("one two"): 1(p) + 7(text) + 1(p) = 9
+      //   "one " (4 chars), "two" (3 chars)
+      //   start of "two": flat = 1 (p_open) + 4 (one ) = 5
+      // p("three four"): 1(p) + 10(text) + 1(p) = 12
+      //   "three" (5 chars), " four" (5 chars)
+      //   end of "three": flat = 9 (p1_size) + 1 (p2_open) + 5 (three) = 15
+      5, // fromFlat: start of "two"
+      15, // toFlat: end of "three"
+      () => [p(text("two")), p(text("three"))],
+      1, // openStart: doc is open
+      1  // openEnd: doc is open
+    ]
+  ];
+
+  testCases.forEach(([description, docFactory, fromFlat, toFlat, expectedContentFactory, expectedOpenStart, expectedOpenEnd]) => {
+    describe(description, () => {
+      let testDoc: DocNode;
+      let expectedContent: BaseNode[];
+
+      beforeAll(() => {
+        testDoc = docFactory();
+        expectedContent = expectedContentFactory();
+        // For debugging:
+        // console.log(`Test: ${description}`);
+        // console.log(`Doc: ${JSON.stringify(testDoc, null, 2)}`);
+        // console.log(`FromFlat: ${fromFlat}, ToFlat: ${toFlat}`);
+        // console.log(`Expected Content: ${JSON.stringify(expectedContent, null, 2)}`);
+        // console.log(`Expected OpenStart: ${expectedOpenStart}, Expected OpenEnd: ${expectedOpenEnd}`);
+      });
+
+      it(`should correctly slice with openStart=${expectedOpenStart}, openEnd=${expectedOpenEnd}`, () => {
+        const resultSlice = sliceDocByFlatOffsets(testDoc, fromFlat, toFlat, schema);
+
+        // Check openStart and openEnd
+        expect(resultSlice.openStart).toBe(expectedOpenStart);
+        expect(resultSlice.openEnd).toBe(expectedOpenEnd);
+
+        // Check content structure (deep equality for nodes)
+        // This requires a proper way to compare node arrays.
+        // For now, let's check length and type of first node if content is not empty.
+        expect(resultSlice.content.length).toBe(expectedContent.length);
+        if (resultSlice.content.length > 0 && expectedContent.length > 0) {
+          expect(resultSlice.content[0].type.name).toBe(expectedContent[0].type.name);
+          // A more thorough comparison would involve checking all nodes, their attributes, and content.
+          // For text nodes, check text content.
+          if (resultSlice.content[0].isText && expectedContent[0].isText) {
+            expect((resultSlice.content[0] as TextNode).text).toBe((expectedContent[0] as TextNode).text);
+          } else if (resultSlice.content[0].type.name === 'paragraph' && expectedContent[0].type.name === 'paragraph') {
+            // Specific check for the "Slice entire first paragraph from two" case
+            const resultPara = resultSlice.content[0] as BaseNode;
+            const expectedPara = expectedContent[0] as BaseNode;
+            expect(resultPara.content?.length).toBe(expectedPara.content?.length);
+            if (resultPara.content?.[0]?.isText && expectedPara.content?.[0]?.isText) {
+              expect(getText(resultPara.content[0])).toBe(getText(expectedPara.content[0]));
+            }
+            // For cross-paragraph, check both if applicable
+            if (resultSlice.content.length > 1 && expectedContent.length > 1) {
+                 const resultPara2 = resultSlice.content[1] as BaseNode;
+                 const expectedPara2 = expectedContent[1] as BaseNode;
+                 expect(resultPara2.content?.length).toBe(expectedPara2.content?.length);
+                 if (resultPara2.content?.[0]?.isText && expectedPara2.content?.[0]?.isText) {
+                    expect(getText(resultPara2.content[0])).toBe(getText(expectedPara2.content[0]));
+                }
+            }
+          }
+          // This is a placeholder for a deep node comparison utility.
+          // expect(areNodesEffectivelyEqual(resultSlice.contentFragment, schema.Fragment.fromArray(expectedContent))).toBe(true);
+        }
+        // console.log("Actual Slice:", JSON.stringify(resultSlice, null, 2));
+      });
+    });
   });
 });

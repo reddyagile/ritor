@@ -168,20 +168,49 @@ export class RitorVDOM {
 
     const html = dataTransfer.getData('text/html');
     const pastedText = dataTransfer.getData('text/plain');
-    let modelNodesToInsert: BaseNode[] | null = null;
-    let openStart = 0; 
-    let openEnd = 0;
+    let sliceToInsert: Slice | null = null;
+
+    const currentDebugFlag = (globalThis as any).DEBUG_PASTE_HANDLING || false; // Allow global override
 
     if (html && html.length > 0) {
+        if (currentDebugFlag) console.log("[PasteHandling] HTML content found:", html);
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = html;
-        const parsedResult = this.domParser.parseFragment(tempDiv, selection.anchor.path.length > 0 ? nodeAtPath(this.currentViewDoc, selection.anchor.path.slice(0,-1))?.type : this.schema.topNodeType ); // Pass parent type of selection anchor for context
-        modelNodesToInsert = parsedResult.nodes;
-        openStart = parsedResult.openStart;
-        openEnd = parsedResult.openEnd;
+
+        // Determine context for parsing: if selection anchor is deep, use its parent type, else use doc type.
+        const contextNodeType = selection.anchor.path.length > 0
+            ? nodeAtPath(this.currentViewDoc, selection.anchor.path.slice(0,-1))?.type
+            : this.schema.topNodeType;
+
+        const parsedResult = this.domParser.parseFragment(tempDiv, contextNodeType || this.schema.topNodeType);
+
+        if (currentDebugFlag) {
+            console.log("[PasteHandling] Parsed HTML fragment:", JSON.stringify(parsedResult.nodes.map(n => n.type.name)));
+            console.log(`[PasteHandling] Parsed openStart: ${parsedResult.openStart}, openEnd: ${parsedResult.openEnd}`);
+        }
+
+        if (parsedResult.nodes && parsedResult.nodes.length > 0) {
+            sliceToInsert = new Slice(parsedResult.nodes, parsedResult.openStart, parsedResult.openEnd);
+        } else {
+            if (currentDebugFlag) console.log("[PasteHandling] HTML parsing yielded no nodes.");
+        }
     }
 
-    if (modelNodesToInsert && modelNodesToInsert.length > 0) {
+    if (!sliceToInsert && pastedText && pastedText.trim().length > 0) {
+        if (currentDebugFlag) console.log("[PasteHandling] No HTML slice, or HTML parsing failed. Using plain text:", pastedText);
+        const lines = pastedText.split(/\r\n|\r|\n/);
+        const paragraphNodes: BaseNode[] = lines.map(line => {
+            // Ensure even empty lines become paragraphs with empty text nodes if desired,
+            // or filter them out if not. Current behavior: creates paragraph for each line.
+            return this.schema.node(this.schema.nodes.paragraph, null, [this.schema.text(line)]);
+        });
+        // For a list of blocks, openStart/End are typically 0. Slice.fromFragment might also achieve this.
+        sliceToInsert = new Slice(paragraphNodes, 0, 0);
+        if (currentDebugFlag) console.log("[PasteHandling] Created slice from plain text:", JSON.stringify(sliceToInsert.content.map(n=>n.type.name)));
+    }
+
+
+    if (sliceToInsert && sliceToInsert.content.length > 0) {
         const tr = new Transaction(this.currentViewDoc, selection);
         const fromFlat = modelPositionToFlatOffset(this.currentViewDoc, selection.anchor, this.schema);
         const toFlat = modelPositionToFlatOffset(this.currentViewDoc, selection.head, this.schema);

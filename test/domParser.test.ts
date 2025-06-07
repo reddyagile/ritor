@@ -3,8 +3,9 @@
 import { DOMParser as RitorDOMParser } from '../src/domParser.js';
 import { Schema } from '../src/schema.js';
 import { basicNodeSpecs, basicMarkSpecs } from '../src/basicSchema.js';
-import { DocNode, TextNode, BaseNode, Mark } from '../src/documentModel.js'; 
-import { Attrs, NodeSpec } from '../src/schemaSpec.js';
+import { DocNode, TextNode, BaseNode, Mark as ModelMark } from '../src/documentModel.js'; // Renamed Mark to ModelMark to avoid conflict
+import { Attrs, NodeSpec, MarkSpec } from '../src/schemaSpec.js'; // Added MarkSpec
+import { getText } from '../src/modelUtils.js'; // Added getText (one line is enough)
 
 // Disable debug logging
 (globalThis as any).DEBUG_REPLACESTEP = false; 
@@ -17,7 +18,7 @@ const schema = new Schema({
 });
 
 // Helper functions to create nodes
-const createMark = (type: string, attrs?: any): Mark => schema.marks[type]?.create(attrs) as Mark;
+const createMark = (type: string, attrs?: any): ModelMark => schema.marks[type]?.create(attrs) as ModelMark; // Changed Mark to ModelMark
 const createText = (text: string, marksArray?: {type: string, attrs?: any}[]): TextNode => {
     const marks = marksArray?.map(m => createMark(m.type, m.attrs)).filter(m => !!m) || [];
     return schema.text(text, marks) as TextNode;
@@ -424,5 +425,404 @@ describe('RitorDOMParser', () => {
             // A more direct test for _calculateOpenDepth would be to pass it specific DOM nodes.
             // Let's adjust the expectation based on how parseFragment gets its children.
         });
+    });
+
+    describe('ParseRule Priority and Ambiguity Resolution', () => {
+        // Define a schema variant with nodes that could be ambiguous without priority
+        const priorityNodeSpecs: { [name: string]: NodeSpec } = {
+            ...basicNodeSpecs,
+            doc: { ...(basicNodeSpecs.doc as NodeSpec), content: "(generic_div_block | specific_div_block | extra_specific_div_block | paragraph | block | figure)+" },
+            generic_div_block: {
+                content: "block+",
+                group: "block",
+                toDOM: () => ["div", {class: "generic"}, 0],
+                parseDOM: [{ tag: "div" }] // Default priority 50
+            },
+            specific_div_block: {
+                content: "block+",
+                group: "block",
+                toDOM: () => ["div", {class: "specific"}, 0],
+                parseDOM: [{ tag: "div.specific", priority: 60 }]
+            },
+            extra_specific_div_block: {
+                content: "block+",
+                group: "block",
+                toDOM: () => ["div", {class: "extra specific"}, 0], // DOM output shows both classes
+                parseDOM: [{ tag: "div.specific.extra", priority: 70 }] // More specific selector
+            }
+        };
+        // Ensure all basic nodes are present if not overridden
+        for (const key in basicNodeSpecs) {
+            if (!priorityNodeSpecs[key]) priorityNodeSpecs[key] = basicNodeSpecs[key];
+        }
+
+        const priorityMarkSpecs: { [name: string]: MarkSpec } = {
+            ...basicMarkSpecs,
+            highlight: {
+                attrs: { intensity: { default: "normal" } },
+                toDOM: (mark: ModelMark) => ["span", { class: `highlight-${mark.attrs!.intensity}` }, 0], // Typed mark, added ! for attrs
+                parseDOM: [
+                    { tag: "span.highlight-strong", priority: 70, getAttrs: () => ({ intensity: "strong" }) },
+                    { tag: "span.highlight-normal", priority: 50, getAttrs: () => ({ intensity: "normal" }) },
+                    { tag: "span.highlight", priority: 40 } // Lowest priority, implies normal intensity via default
+                ]
+            }
+        };
+
+        const schemaWithPriorities = new Schema({ nodes: priorityNodeSpecs, marks: priorityMarkSpecs });
+        let priorityParser: RitorDOMParser;
+
+        beforeEach(() => {
+            priorityParser = new RitorDOMParser(schemaWithPriorities);
+        });
+
+        it('should choose generic_div_block for a plain div', () => {
+            const html = '<div><p>content</p></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            expect(getStructure(resultDoc.content[0]!)).toMatchObject({ type: 'generic_div_block', content: [{type: 'paragraph'}] });
+        });
+
+        it('should choose specific_div_block for div.specific due to higher priority', () => {
+            const html = '<div class="specific"><p>content</p></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            expect(getStructure(resultDoc.content[0]!)).toMatchObject({ type: 'specific_div_block', content: [{type: 'paragraph'}] });
+        });
+
+        it('should choose extra_specific_div_block for div.specific.extra due to higher priority', () => {
+            const html = '<div class="specific extra"><p>content</p></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            expect(getStructure(resultDoc.content[0]!)).toMatchObject({ type: 'extra_specific_div_block', content: [{type: 'paragraph'}] });
+        });
+
+        it('should choose extra_specific_div_block for div.extra.specific (reversed classes) due to selector match and higher priority', () => {
+            const html = '<div class="extra specific"><p>content</p></div>'; // DOM class order doesn't matter for CSS selector matching usually
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            expect(getStructure(resultDoc.content[0]!)).toMatchObject({ type: 'extra_specific_div_block', content: [{type: 'paragraph'}] });
+        });
+
+        it('should choose higher priority "strong" tag for bold mark over "b" tag if rules were on same element (conceptual)', () => {
+            // This test relies on basicSchema where 'strong' has priority 55 and 'b' has 50 (default)
+            const html = '<p><strong>bold by strong</strong></p>'; // DOMParser will see <strong>
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            // Use the original schema for this, as prioritySchema doesn't change bold mark rules
+            const resultDoc = parser.parse(tempDiv);
+            // We expect bold mark. The priority ensures 'strong' rule is chosen if it were ambiguous for the same element.
+            // The getStructure will just show 'bold', not which rule created it.
+            // This test mainly confirms 'strong' still produces 'bold'.
+             expect(getStructure(resultDoc.content[0]!.content![0])).toEqual({ type: 'text', text: 'bold by strong', marks: ['bold'] });
+        });
+
+        it('should apply higher priority mark rule: span.highlight-strong', () => {
+            const html = '<p><span class="highlight-strong highlight-normal">highlighted text</span></p>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            const pNode = resultDoc.content[0] as BaseNode;
+            const textNode = pNode.content![0] as TextNode;
+            expect(textNode.marks).toBeDefined();
+            expect(textNode.marks!.length).toBe(1);
+            expect(textNode.marks![0].type.name).toBe('highlight');
+            expect(textNode.marks![0].attrs).toBeDefined();
+            expect(textNode.marks![0].attrs!.intensity).toBe('strong');
+        });
+
+        it('should apply medium priority mark rule: span.highlight-normal', () => {
+            const html = '<p><span class="highlight-normal highlight">highlighted text</span></p>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            const pNode = resultDoc.content[0] as BaseNode;
+            const textNode = pNode.content![0] as TextNode;
+            expect(textNode.marks).toBeDefined();
+            expect(textNode.marks!.length).toBe(1);
+            expect(textNode.marks![0].type.name).toBe('highlight');
+            expect(textNode.marks![0].attrs).toBeDefined();
+            expect(textNode.marks![0].attrs!.intensity).toBe('normal');
+        });
+
+        it('should apply lowest priority mark rule: span.highlight (default intensity)', () => {
+            const html = '<p><span class="highlight">highlighted text</span></p>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = priorityParser.parse(tempDiv);
+            const pNode = resultDoc.content[0] as BaseNode;
+            const textNode = pNode.content![0] as TextNode;
+            expect(textNode.marks).toBeDefined();
+            expect(textNode.marks!.length).toBe(1);
+            expect(textNode.marks![0].type.name).toBe('highlight');
+            expect(textNode.marks![0].attrs).toBeDefined();
+            expect(textNode.marks![0].attrs!.intensity).toBe('normal'); // Default from markSpec
+        });
+    });
+
+    describe('Advanced Priority, Context, and getContent Interaction', () => {
+        const advancedSchemaNodes: { [name: string]: NodeSpec } = {
+            ...basicNodeSpecs, // Keep basic nodes
+            doc: { ...(basicNodeSpecs.doc as NodeSpec), content: "(parent_a | parent_b | contextual_item | custom_figure_complex | strict_container | paragraph)+" },
+            parent_a: {
+                group: "block",
+                content: "contextual_item+",
+                toDOM: () => ["div", { class: "parent-a" }, 0],
+                parseDOM: [{ tag: "div.parent-a" }]
+            },
+            parent_b: {
+                group: "block",
+                content: "contextual_item+",
+                toDOM: () => ["div", { class: "parent-b" }, 0],
+                parseDOM: [{ tag: "div.parent-b" }]
+            },
+            contextual_item: { // This node's parsing depends on context and priority
+                group: "block", // Assuming it's a block for simplicity in parent content
+                attrs: { type: {default: "generic"} },
+                toDOM: (node) => ["div", { class: `item ${(node.attrs && node.attrs.type) || 'generic'}` }, 0], // Added null check for attrs
+                parseDOM: [
+                    { tag: "div.item", context: "parent_a/", priority: 70, getAttrs: () => ({type: "from_parent_a"}) },
+                    { tag: "div.item", context: "parent_b/", priority: 60, getAttrs: () => ({type: "from_parent_b"}) },
+                    { tag: "div.item", priority: 50, getAttrs: () => ({type: "generic_item"}) } // Fallback without specific context
+                ]
+            },
+            custom_figure_complex: {
+                group: "block",
+                content: "image paragraph+", // Expects an image then one or more paragraphs
+                attrs: { id: {default: null} },
+                toDOM: node => ["figure", {class: "complex"}, 0],
+                parseDOM: [{
+                    tag: "figure.complex",
+                    priority: 60, // Explicit higher priority
+                    getContent: (domEl: HTMLElement, parser: RitorDOMParser) => {
+                        const children: BaseNode[] = [];
+                        const imgEl = domEl.querySelector("img");
+                        if (imgEl) {
+                            const imgNode = parser['parseNode'](imgEl, [], schema.nodes.custom_figure_complex); // Use internal parseNode
+                            if (imgNode && !Array.isArray(imgNode)) children.push(imgNode);
+                        }
+                        const captionDiv = domEl.querySelector("div.caption");
+                        if (captionDiv) {
+                            for(let i=0; i < captionDiv.childNodes.length; i++) {
+                                const childNode = captionDiv.childNodes[i];
+                                // Ensure marks are parsed correctly within getContent by passing them down if needed
+                                // For this example, assume paragraphs don't inherit marks from figure.
+                                const parsedChild = parser['parseNode'](childNode, [], schema.nodes.custom_figure_complex);
+                                if (parsedChild) {
+                                    if(Array.isArray(parsedChild)) children.push(...parsedChild);
+                                    else children.push(parsedChild);
+                                }
+                            }
+                        }
+                        return children;
+                    }
+                }]
+            },
+            strict_container: {
+                group: "block",
+                content: "paragraph+", // Must contain one or more paragraphs
+                toDOM: () => ["div", {class: "strict"}, 0],
+                parseDOM: [{
+                    tag: "div.strict",
+                    getContent: (domEl: HTMLElement, parser: RitorDOMParser) => {
+                        // Intentionally return non-paragraph content to test validation warning
+                        const textNode = domEl.ownerDocument.createTextNode("invalid content");
+                        const parsedText = parser['parseNode'](textNode, [], schema.nodes.strict_container);
+                        return parsedText ? (Array.isArray(parsedText) ? parsedText : [parsedText]) : [];
+                    }
+                }]
+            }
+        };
+        const schemaWithAdvancedRules = new Schema({ nodes: advancedSchemaNodes, marks: basicMarkSpecs });
+        let advParser: RitorDOMParser;
+
+        beforeEach(() => {
+            advParser = new RitorDOMParser(schemaWithAdvancedRules);
+        });
+
+        // Priority and Context
+        it('should use higher priority rule matching context parent_a', () => {
+            const html = '<div class="parent-a"><div class="item">Content</div></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = advParser.parse(tempDiv);
+            const parentNode = resultDoc.content[0] as BaseNode;
+            expect(parentNode.type.name).toBe('parent_a');
+            const itemNode = parentNode.content![0] as BaseNode;
+            expect(itemNode.type.name).toBe('contextual_item');
+            expect(itemNode.attrs!.type).toBe('from_parent_a');
+        });
+
+        it('should use lower priority rule matching context parent_b', () => {
+            const html = '<div class="parent-b"><div class="item">Content</div></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = advParser.parse(tempDiv);
+            const parentNode = resultDoc.content[0] as BaseNode;
+            expect(parentNode.type.name).toBe('parent_b');
+            const itemNode = parentNode.content![0] as BaseNode;
+            expect(itemNode.type.name).toBe('contextual_item');
+            expect(itemNode.attrs!.type).toBe('from_parent_b');
+        });
+
+        it('should use fallback rule for div.item when no context matches', () => {
+            const html = '<div class="item">Content</div>'; // No parent_a or parent_b
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = advParser.parse(tempDiv);
+            const itemNode = resultDoc.content[0] as BaseNode;
+            expect(itemNode.type.name).toBe('contextual_item');
+            expect(itemNode.attrs!.type).toBe('generic_item');
+        });
+
+        // getContent with complex structure
+        it('custom_figure_complex getContent should parse img and paragraphs with marks', () => {
+            const html = '<figure class="complex"><img src="image.png"><div class="caption"><p>Para with <strong>bold</strong></p><p>Another para</p></div></figure>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = advParser.parse(tempDiv);
+            const figureNode = resultDoc.content[0] as BaseNode;
+            expect(figureNode.type.name).toBe('custom_figure_complex');
+            expect(figureNode.content!.length).toBe(3); // img, p, p
+            expect(figureNode.content![0].type.name).toBe('image');
+            expect(figureNode.content![0].attrs!.src).toBe('image.png');
+            expect(figureNode.content![1].type.name).toBe('paragraph');
+            const p1TextNodes = figureNode.content![1].content! as TextNode[];
+            expect(getText(p1TextNodes[0])).toBe("Para with ");
+            expect(getText(p1TextNodes[1])).toBe("bold");
+            expect(p1TextNodes[1]?.marks?.some(m => m.type.name === "bold")).toBe(true); // Added optional chaining
+            expect(figureNode.content![2].type.name).toBe('paragraph');
+            expect(getText(figureNode.content![2].content![0])).toBe("Another para");
+        });
+
+        // Schema validation failure in getContent
+        it('should warn when getContent for strict_container returns invalid content', () => {
+            const html = '<div class="strict">anything</div>'; // getContent will return a text node
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            consoleWarnSpy.mockClear(); // Clear spy from other tests
+            advParser.parse(tempDiv);
+            expect(consoleWarnSpy.mock.calls.some(call => call[0].includes('Schema validation failed during DOMParser.parseNode for content of node type: strict_container'))).toBe(true);
+        });
+    });
+
+    describe('Attribute Validation during Parsing', () => {
+        // Schema with a node and a mark that have specific attribute requirements
+        const attrValidationNodeSpecs: { [name: string]: NodeSpec } = {
+            ...basicNodeSpecs,
+            doc: { ...(basicNodeSpecs.doc as NodeSpec), content: "(node_with_attrs|paragraph)+" },
+            node_with_attrs: {
+                group: "block",
+                attrs: {
+                    known: { default: "defaultVal" },
+                    required_attr: {}, // No default, so it's "required" by parsing logic
+                    optional_attr: { default: null }
+                },
+                toDOM: node => ["div", node.attrs, 0],
+                parseDOM: [{
+                    tag: "div.node-with-attrs",
+                    getAttrs: (domNodeOrValue: HTMLElement | string) => {
+                        if (typeof domNodeOrValue === 'string') return false;
+                        const dom = domNodeOrValue as HTMLElement;
+                        const requiredVal = dom.getAttribute("data-required");
+                        return {
+                            known: dom.getAttribute("data-known"),
+                            required_attr: requiredVal === null ? undefined : requiredVal, // Make it undefined if not present
+                            optional_attr: dom.getAttribute("data-optional"),
+                            unknown_attr: dom.getAttribute("data-unknown")
+                        };
+                    }
+                }]
+            }
+        };
+        const attrValidationMarkSpecs: { [name: string]: MarkSpec } = {
+            ...basicMarkSpecs,
+            mark_with_attrs: {
+                attrs: {
+                    known_mark_attr: { default: "defaultMarkVal" },
+                    required_mark_attr: {} // No default
+                },
+                toDOM: (mark: ModelMark) => ["span", {
+                    "data-known-mark": mark.attrs!.known_mark_attr,
+                    "data-required-mark": mark.attrs!.required_mark_attr
+                }, 0],
+                parseDOM: [{
+                    tag: "span.mark-with-attrs",
+                    getAttrs: (domNodeOrValue: HTMLElement | string) => {
+                        if (typeof domNodeOrValue === 'string') return false;
+                        const dom = domNodeOrValue as HTMLElement;
+                        const requiredMarkVal = dom.getAttribute("data-required-mark");
+                        return {
+                            known_mark_attr: dom.getAttribute("data-known-mark"),
+                            required_mark_attr: requiredMarkVal === null ? undefined : requiredMarkVal, // Make it undefined if not present
+                            unknown_mark_attr: dom.getAttribute("data-unknown-mark")
+                        };
+                    }
+                }]
+            }
+        };
+        const schemaWithAttrValidation = new Schema({ nodes: attrValidationNodeSpecs, marks: attrValidationMarkSpecs });
+        let attrParser: RitorDOMParser;
+        let consoleWarnSpy: jest.SpyInstance;
+
+
+        beforeEach(() => {
+            attrParser = new RitorDOMParser(schemaWithAttrValidation);
+            // Global spy for all tests in this describe block
+            consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        });
+
+        afterEach(() => {
+            consoleWarnSpy.mockRestore();
+        });
+
+        it('should strip unknown node attributes and warn', () => {
+            const html = '<div class="node-with-attrs" data-known="val1" data-unknown="stripme"><p>Test</p></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = attrParser.parse(tempDiv);
+
+            const node = resultDoc.content[0];
+            expect(node.type.name).toBe("node_with_attrs");
+            expect(node.attrs!.known).toBe("val1");
+            expect(node.attrs!.unknown_attr).toBeUndefined();
+            expect(consoleWarnSpy.mock.calls.some(call => call[0].includes('Stripping unknown attribute "unknown_attr" from node type "node_with_attrs"'))).toBe(true);
+        });
+
+        it('should warn if a required node attribute is missing', () => {
+            const html = '<div class="node-with-attrs" data-known="val1"><p>Test</p></div>'; // data-required is missing
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            attrParser.parse(tempDiv); // We only care about the warning
+            expect(consoleWarnSpy.mock.calls.some(call => call[0].includes('Missing required attribute "required_attr" for node type "node_with_attrs"'))).toBe(true);
+        });
+
+        it('should parse known node attributes correctly without warning', () => {
+            const html = '<div class="node-with-attrs" data-known="val1" data-required="reqval" data-optional="optval"><p>Test</p></div>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = attrParser.parse(tempDiv);
+            const node = resultDoc.content[0];
+            expect(node.attrs!.known).toBe("val1");
+            expect(node.attrs!.required_attr).toBe("reqval");
+            expect(node.attrs!.optional_attr).toBe("optval");
+            // Check that no stripping or missing warnings occurred for these
+            expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Stripping unknown attribute "known"'));
+            expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Stripping unknown attribute "required_attr"'));
+            expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Stripping unknown attribute "optional_attr"'));
+            expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Missing required attribute "known"'));
+            expect(consoleWarnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Missing required attribute "optional_attr"'));
+        });
+
+        it('should strip unknown mark attributes and warn', () => {
+            const html = '<p><span class="mark-with-attrs" data-known-mark="markval" data-unknown-mark="stripme">Text</span></p>';
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            const resultDoc = attrParser.parse(tempDiv);
+
+            const textNode = resultDoc.content[0]!.content![0] as TextNode;
+            expect(textNode.marks).toBeDefined();
+            expect(textNode.marks!.length).toBe(1);
+            const mark = textNode.marks![0];
+            expect(mark.type.name).toBe("mark_with_attrs");
+            expect(mark.attrs!.known_mark_attr).toBe("markval");
+            expect(mark.attrs!.unknown_mark_attr).toBeUndefined();
+            expect(consoleWarnSpy.mock.calls.some(call => call[0].includes('Stripping unknown attribute "unknown_mark_attr" from mark type "mark_with_attrs"'))).toBe(true);
+        });
+
+        it('should warn if a required mark attribute is missing', () => {
+            const html = '<p><span class="mark-with-attrs" data-known-mark="markval">Text</span></p>'; // data-required-mark is missing
+            const tempDiv = document.createElement('div'); tempDiv.innerHTML = html;
+            attrParser.parse(tempDiv);
+            expect(consoleWarnSpy.mock.calls.some(call => call[0].includes('Missing required attribute "required_mark_attr" for mark type "mark_with_attrs"'))).toBe(true);
+        });
+
     });
 });

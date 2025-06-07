@@ -18,14 +18,14 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   special_paragraph_for_li: { 
     content: "inline*",
     group: "block", 
-    attrs: { id: {} },
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode): DOMOutputSpec => ["p", { id: node.attrs!.id, class:"special-li-p" }, 0],
-    parseDOM: [{ tag: "p.special", context: "list_item/" }] 
+    parseDOM: [{ tag: "p.special", context: "list_item/", priority: 60 }]
   },
   paragraph: { // General paragraph rule
     content: "inline*",
     group: "block",
-    attrs: { id: {} }, 
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode): DOMOutputSpec => {
       const attrs: Attrs = {};
       if (node.attrs?.id) {
@@ -52,7 +52,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   heading: {
     attrs: { 
         level: { default: 1 },
-        id: {} 
+        id: {default: null} // Made ID optional
     }, 
     content: "inline*", 
     group: "block",
@@ -77,7 +77,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     content: "block+", // Simplified content model for debugging context parsing
     group: "list_item_block", 
     defining: true, 
-    attrs: { id: {} },
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode): DOMOutputSpec => ["li", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "li" }],
   },
@@ -85,7 +85,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   bullet_list: {
     content: "list_item+", 
     group: "block", 
-    attrs: { id: {} },
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode): DOMOutputSpec => ["ul", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "ul" }],
   },
@@ -95,7 +95,7 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     group: "block",
     attrs: { 
         order: { default: 1 }, 
-        id: {} 
+        id: {default: null} // Made ID optional
     },
     toDOM: (node: BaseNode): DOMOutputSpec => {
         const domAttrs: Attrs = { id: node.attrs!.id };
@@ -120,12 +120,12 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
     content: "block+", 
     group: "block",
     defining: true,
-    attrs: { id: {} }, 
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode): DOMOutputSpec => ["blockquote", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "blockquote" }],
   },
   image: { 
-    attrs: { src: { default: null }, alt: { default: null }, title: { default: null }, id: {} },
+    attrs: { src: { default: null }, alt: { default: null }, title: { default: null }, id: {default: null} }, // Made ID optional
     atom: true, 
     group: "block", 
     toDOM: (node: BaseNode): DOMOutputSpec => {
@@ -151,14 +151,14 @@ export const basicNodeSpecs: { [name: string]: NodeSpec } = {
   figcaption: { // New figcaption node
     content: "inline*",
     group: "block", // Conceptually a block, but part of figure
-    attrs: { id: {} }, 
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode) => ["figcaption", { id: node.attrs!.id }, 0],
     parseDOM: [{ tag: "figcaption" }]
   },
   figure: { // New figure node with getContent
     content: "(image figcaption?)", // Model: image, then optional figcaption
     group: "block",
-    attrs: { id: {} },
+    attrs: { id: {default: null} }, // Made ID optional
     toDOM: (node: BaseNode) => {
         const domAttrs: any = { id: node.attrs!.id };
         return ["figure", domAttrs, 0]; // Content hole for children
@@ -203,7 +203,7 @@ export const basicMarkSpecs: { [name: string]: MarkSpec } = {
   bold: {
     toDOM: (_mark: ModelMark, _inline: boolean): DOMOutputSpec => ["strong", 0],
     parseDOM: [
-        {tag: "strong"}, 
+        {tag: "strong", priority: 55},
         {tag: "b"}, 
         // {style: "font-weight=bold"}, // Removed to prevent h1 from getting bold mark
         {style: "font-weight=700"}, 

@@ -1,7 +1,7 @@
 // src/domParser.ts
 
-import { Schema, NodeType } from './schema.js'; 
-import { ParseRule, DOMParserInstance } from './schemaSpec.js'; 
+import { Schema, NodeType, MarkType } from './schema.js'; // Added MarkType
+import { ParseRule, DOMParserInstance, Attrs } from './schemaSpec.js'; // Added Attrs
 import { DocNode, BaseNode, TextNode, Mark } from './documentModel.js';
 import { marksEq, normalizeMarks } from './modelUtils.js';
 import { Slice } from './transform/slice.js'; // For Slice.empty, though not used here directly
@@ -135,48 +135,94 @@ export class DOMParser {
         const marksFromThisElement = this.parseMarks(element, parentModelType);
         const currentEffectiveMarks = normalizeMarks([...activeMarks, ...marksFromThisElement]);
 
+        let bestMatch: { rule: ParseRule, nodeType: NodeType, attrs: Attrs | null | undefined, priority: number } | null = null; // Refined 'attrs' type
+
         for (const nodeTypeName in this.schema.nodes) {
             const nodeType = this.schema.nodes[nodeTypeName];
             if (nodeType.spec.parseDOM) {
                 for (const rule of nodeType.spec.parseDOM) {
                     if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p" || rule.tag?.includes("h"))) { 
-                        console.log(`[PARSE_NODE_TRACE] Checking NodeType ${nodeTypeName} rule: tag="${rule.tag}", context="${rule.context}" against <${elementName} class="${element.className}"> with parentModelType: ${parentModelType?.name}`);
+                        console.log(`[PARSE_NODE_TRACE] Checking NodeType ${nodeTypeName} rule: tag="${rule.tag}", priority="${rule.priority}", context="${rule.context}" against <${elementName} class="${element.className}"> with parentModelType: ${parentModelType?.name}`);
                     }
                     if (this.matchesRule(element, rule, elementName, parentModelType)) {
-                        if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]   Rule MATCHED for ${nodeTypeName}!`);
                         const attrs = rule.getAttrs ? rule.getAttrs(element) : {};
-                        if (attrs === false) { if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special")||rule.tag==="p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]     getAttrs returned false, skipping.`); continue; }
+                        const ruleAttrs = rule.getAttrs ? rule.getAttrs(element) : {}; // Renamed to ruleAttrs for clarity
+                        if (ruleAttrs === false) {
+                            if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special")||rule.tag==="p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]     getAttrs returned false, skipping rule for ${nodeTypeName}.`);
+                            continue;
+                        }
+                        
+                        const currentPriority = rule.priority == null ? 50 : rule.priority;
+                        if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]   Rule MATCHED for ${nodeTypeName}! Priority: ${currentPriority}`);
 
-                        let parsedChildren: BaseNode[] = [];
-                        if (typeof rule.getContent === 'function') {
-                            parsedChildren = rule.getContent(element, this as DOMParserInstance); 
-                        } else if (!nodeType.isLeafType) {
-                            for (let i = 0; i < element.childNodes.length; i++) {
-                                const childResult = this.parseNode(element.childNodes[i] as ChildNode, currentEffectiveMarks, nodeType);
-                                if (childResult) {
-                                    if (Array.isArray(childResult)) parsedChildren.push(...childResult);
-                                    else parsedChildren.push(childResult);
-                                }
-                            }
+                        if (bestMatch === null || currentPriority > bestMatch.priority) {
+                            if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]     New bestMatch for ${nodeTypeName} (Priority: ${currentPriority})`);
+                            bestMatch = { rule, nodeType, attrs: ruleAttrs, priority: currentPriority }; // Storing ruleAttrs
+                        } else {
+                            if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p"|| rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]     Existing bestMatch for ${bestMatch.nodeType.name} (Priority: ${bestMatch.priority}) is same or higher.`);
                         }
-                        
-                        if (!nodeType.isLeafType) { 
-                            if (!nodeType.checkContent(parsedChildren)) {
-                                console.warn( `Schema validation failed during DOMParser.parseNode for content of node type: ${nodeType.name}.`, "\nDOM element:", element.outerHTML, "\nExpected content expression:", nodeType.contentExpressionString, "\nParsed child content (model nodes):", parsedChildren.map(n => n.type.name));
-                            }
-                        }
-                        
-                        if (nodeType.isTextType) { 
-                            return this.schema.text(element.textContent || "", currentEffectiveMarks);
-                        }
-                        return this.schema.node(nodeType, attrs, parsedChildren);
                     } else {
                          if (DEBUG_PARSE_NODE && (rule.tag?.includes("p.special") || rule.tag === "p" || rule.tag?.includes("h"))) console.log(`[PARSE_NODE_TRACE]   Rule DID NOT MATCH for ${nodeTypeName}.`);
                     }
                 }
             }
         }
+
+        if (bestMatch) {
+            const { rule, nodeType } = bestMatch;
+            let finalAttrs: Attrs = bestMatch.attrs === undefined ? null : bestMatch.attrs; // Ensure type compatibility
+
+            // --- START Attribute Validation ---
+            if (finalAttrs) {
+                const tempValidatedAttrs: Attrs = {};
+                const specAttrsDef = nodeType.spec.attrs || {};
+                for (const key in finalAttrs) {
+                    if (specAttrsDef.hasOwnProperty(key)) {
+                        tempValidatedAttrs[key] = finalAttrs[key];
+                    } else {
+                        console.warn(`DOMParser.parseNode: Stripping unknown attribute "${key}" from node type "${nodeType.name}" during parsing. DOM element: <${element.tagName.toLowerCase()} class="${element.className}">`);
+                    }
+                }
+                finalAttrs = Object.keys(tempValidatedAttrs).length > 0 ? tempValidatedAttrs : null;
+            }
+
+            // Required attributes check
+            const specAttrsDef = nodeType.spec.attrs || {};
+            for (const attrName in specAttrsDef) {
+                if (specAttrsDef[attrName].default === undefined) {
+                    if (!finalAttrs || finalAttrs[attrName] === undefined) {
+                        console.warn(`DOMParser.parseNode: Missing required attribute "${attrName}" for node type "${nodeType.name}" (no default value in spec). DOM element: <${element.tagName.toLowerCase()} class="${element.className}">`);
+                    }
+                }
+            }
+            // --- END Attribute Validation ---
+
+            let parsedChildren: BaseNode[] = [];
+            if (typeof rule.getContent === 'function') {
+                parsedChildren = rule.getContent(element, this as DOMParserInstance);
+            } else if (!nodeType.isLeafType) {
+                for (let i = 0; i < element.childNodes.length; i++) {
+                    const childResult = this.parseNode(element.childNodes[i] as ChildNode, currentEffectiveMarks, nodeType);
+                    if (childResult) {
+                        if (Array.isArray(childResult)) parsedChildren.push(...childResult);
+                        else parsedChildren.push(childResult);
+                    }
+                }
+            }
+
+            if (!nodeType.isLeafType) {
+                if (!nodeType.checkContent(parsedChildren)) {
+                    console.warn( `Schema validation failed during DOMParser.parseNode for content of node type: ${nodeType.name}.`, "\nDOM element:", element.outerHTML, "\nExpected content expression:", nodeType.contentExpressionString, "\nParsed child content (model nodes):", parsedChildren.map(n => n.type.name));
+                }
+            }
+
+            if (nodeType.isTextType) {
+                return this.schema.text(element.textContent || "", currentEffectiveMarks);
+            }
+            return this.schema.node(nodeType, finalAttrs, parsedChildren);
+        }
         
+        // Fallback logic if no node rule matched
         const childrenContent: BaseNode[] = [];
         for (let i = 0; i < element.childNodes.length; i++) {
             const childResult = this.parseNode(element.childNodes[i] as ChildNode, currentEffectiveMarks, parentModelType);
@@ -200,20 +246,59 @@ export class DOMParser {
         return childrenContent.length > 0 ? childrenContent : null;
     }
 
-    private parseMarks(element: HTMLElement, parentModelType?: NodeType): Mark[] { 
-        let marks: Mark[] = [];
+    private parseMarks(element: HTMLElement, parentModelType?: NodeType): Mark[] {
+        const collectedMarksInfo: Map<MarkType, { rule: ParseRule, attrs: Attrs | null | undefined, priority: number }> = new Map(); // Refined 'attrs' type
+
         for (const markTypeName in this.schema.marks) {
             const markType = this.schema.marks[markTypeName];
             if (markType.spec.parseDOM) {
                 for (const rule of markType.spec.parseDOM) {
                     if (this.matchesRule(element, rule, element.nodeName.toLowerCase(), parentModelType)) {
-                        const attrs = rule.getAttrs ? rule.getAttrs(element) : {};
-                        if (attrs !== false) marks.push(markType.create(attrs || undefined));
+                        const ruleAttrs = rule.getAttrs ? rule.getAttrs(element) : {}; // Renamed to ruleAttrs
+                        if (ruleAttrs === false) continue; // Rule's getAttrs explicitly said no match
+
+                        const currentPriority = rule.priority == null ? 50 : rule.priority;
+                        const existingMatch = collectedMarksInfo.get(markType);
+
+                        if (!existingMatch || currentPriority > existingMatch.priority) {
+                            collectedMarksInfo.set(markType, { rule, attrs: ruleAttrs, priority: currentPriority }); // Storing ruleAttrs
+                        }
                     }
                 }
             }
         }
-        return normalizeMarks(marks); 
+
+        const finalMarks: Mark[] = [];
+        collectedMarksInfo.forEach((info, markType) => {
+            let finalMarkAttrs: Attrs = info.attrs === undefined ? null : info.attrs; // Ensure type compatibility
+
+            // --- START Attribute Validation for Marks ---
+            if (finalMarkAttrs) {
+                const tempValidatedAttrs: Attrs = {};
+                const specAttrsDef = markType.spec.attrs || {};
+                for (const key in finalMarkAttrs) {
+                    if (specAttrsDef.hasOwnProperty(key)) {
+                        tempValidatedAttrs[key] = finalMarkAttrs[key];
+                    } else {
+                        console.warn(`DOMParser.parseMarks: Stripping unknown attribute "${key}" from mark type "${markType.name}" during parsing. DOM element: <${element.tagName.toLowerCase()} class="${element.className}">`);
+                    }
+                }
+                finalMarkAttrs = Object.keys(tempValidatedAttrs).length > 0 ? tempValidatedAttrs : null;
+            }
+
+            // Required attributes check for Marks
+            const specAttrsDef = markType.spec.attrs || {};
+            for (const attrName in specAttrsDef) {
+                if (specAttrsDef[attrName].default === undefined) {
+                    if (!finalMarkAttrs || finalMarkAttrs[attrName] === undefined) {
+                        console.warn(`DOMParser.parseMarks: Missing required attribute "${attrName}" for mark type "${markType.name}" (no default value in spec). DOM element: <${element.tagName.toLowerCase()} class="${element.className}">`);
+                    }
+                }
+            }
+            // --- END Attribute Validation for Marks ---
+            finalMarks.push(markType.create(finalMarkAttrs || undefined));
+        });
+        return normalizeMarks(finalMarks);
     }
 
     public matchesRule(element: HTMLElement, rule: ParseRule, elementName?: string, parentModelType?: NodeType): boolean { 
