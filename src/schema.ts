@@ -1,5 +1,7 @@
 // src/schema.ts
 import { NodeSpec, MarkSpec, Attrs, DOMOutputSpec } from './schemaSpec.js';
+// Re-export Attrs so other modules importing from schema.ts can use it
+export type { Attrs } from './schemaSpec.js';
 import { BaseNode as ModelNode, TextNode as ModelTextNode, AnyMark as ModelAnyMark, attrsEq } from './documentModel.js';
 
 export interface ContentMatcherElement {

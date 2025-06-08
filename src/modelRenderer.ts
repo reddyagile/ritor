@@ -1,6 +1,6 @@
 import {
   DocNode,
-  ParagraphNode,
+  // ParagraphNode, // FIX: Removed ParagraphNode import
   TextNode,
   HardBreakNode,
   AnyMark,
@@ -109,7 +109,7 @@ export function renderInlineNodes(nodes: ReadonlyArray<BaseNode>, schema: any): 
 
   for (const node of nodes) {
     const nodeType = node.type as NodeType; // node.type is NodeType
-    if (nodeType.isText) {
+    if (nodeType.isTextType) { // FIX: Changed isText to isTextType
       const textNode = node as TextNode;
       const desiredMarks = textNode.marks || [];
 
@@ -162,7 +162,7 @@ export function renderInlineNodes(nodes: ReadonlyArray<BaseNode>, schema: any): 
 export function renderNodeToHtml(node: BaseNode, schema?: any): string { // Schema might be needed for inline rendering context
   const nodeType = node.type as NodeType; // node.type is NodeType
 
-  if (nodeType.isText) { // Text nodes are handled by their parent's inline rendering
+  if (nodeType.isTextType) { // FIX: Changed isText to isTextType
     return escapeHtml((node as TextNode).text);
   }
 
@@ -171,7 +171,7 @@ export function renderNodeToHtml(node: BaseNode, schema?: any): string { // Sche
   return renderDOMOutputSpec(domSpec, () => {
     let contentHtml = "";
     if (node.content && node.content.length > 0) {
-      if (nodeType.inlineContent || nodeType.name === 'paragraph') { // Paragraphs contain inline content
+      if (nodeType.isTextBlock) { // FIX: Use NodeType.isTextBlock getter
         contentHtml = renderInlineNodes(node.content, schema);
       } else { // Block content
         for (const contentNode of node.content) {

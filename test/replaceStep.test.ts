@@ -282,7 +282,7 @@ describe('ReplaceStep.apply', () => {
             // Slice: text(" amazing ") openStart=1, openEnd=1
             const initialDoc = createDoc(createPara(createText("hello wonderful world")));
             const from = modelPositionToFlatOffset(initialDoc, {path: [0,0], offset: 6}, schema); // after "hello "
-            const to = modelPositionToFlatOffset(initialDoc, {path: [0,0], offset: 17}, schema); // after "hello wonderful "
+            const to = modelPositionToFlatOffset(initialDoc, {path: [0,0], offset: 16}, schema); // after "hello wonderful" (exclusive end for "wonderful")
 
             const slice = new Slice([createText(" amazing ")], 1, 1);
             const step: ReplaceStep = new ReplaceStep(from, to, slice); // Explicitly typed

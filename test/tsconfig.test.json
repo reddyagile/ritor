@@ -1,0 +1,31 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "noEmit": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true
+    // Remove "rootDir" and "baseUrl" if they cause issues with specific file includes,
+    // or adjust them if necessary. For now, let's keep it simple.
+  },
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  },
+  "include": [
+    "../src/**/*.ts", // Source files are needed for context
+    // Specific test files to check:
+    "./contentExpression.test.ts",
+    "./diff.test.ts",
+    "./domParser.matchesRule.test.ts",
+    "./domParser.test.ts",
+    "./markSteps.test.ts",
+    "./minimalReplaceStep.test.ts",
+    "./modelUtils.test.ts",
+    "./replaceStep.test.ts"
+    // Excludes selection.test.ts for this subtask
+  ],
+  "exclude": [
+    "../node_modules"
+  ]
+}

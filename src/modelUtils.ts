@@ -28,8 +28,10 @@ export function normalizeInlineArray(inlineNodes: ReadonlyArray<InlineNode>, sch
     let lastNode: InlineNode | null = null;
     for (const node of inlineNodes) {
         if (lastNode && lastNode.isText && !lastNode.isLeaf && node.isText && !node.isLeaf &&
-            marksEq(lastNode.marks || [], node.marks || [])) { 
-            const mergedText = getText(lastNode) + getText(node); // Use getText helper
+            marksEq(lastNode.marks || [], node.marks || [])) {
+            let text1 = getText(lastNode);
+            let text2 = getText(node);
+            let mergedText = text1 + text2; // Reverted: simple concatenation
             if (mergedText) {
                 const currentSchema = schema || node.type.schema; 
                 if (!currentSchema) throw new Error("Schema must be available to normalize inline array and create text nodes.");
@@ -53,9 +55,22 @@ export function modelPositionToFlatOffset(doc: DocNode, position: ModelPosition,
         if (target.isLeaf && i < position.path.length - 1) throw new Error(`Invalid path: cannot descend into leaf ${target.type.name}`);
         currentParentNode = target; currentChildrenInNode = target.content || [];
     }
-    if (currentParentNode.isText && !currentParentNode.isLeaf) { const tN = currentParentNode as TextNode; if (position.offset < 0 || position.offset > getText(tN).length) throw new Error(`Invalid offset ${position.offset} for TextNode len ${getText(tN).length}`); flatOffset += position.offset; } //Use getText
-    else if (!currentParentNode.isLeaf) { const content = currentParentNode.content || []; if (position.offset < 0 || position.offset > content.length) throw new Error(`Invalid offset ${position.offset} for Element with ${content.length} children`); for (let k = 0; k < position.offset; k++) flatOffset += content[k].nodeSize; }
-    else { if (position.offset !== 0 && !(position.offset === 1 && currentParentNode.nodeSize === 1)) { /* console.warn(`Offset for leaf ${currentParentNode.type.name} is ${position.offset}.`); */ } }
+    if (currentParentNode.isText && !currentParentNode.isLeaf) {
+        const tN = currentParentNode as TextNode;
+        if (position.offset < 0 || position.offset > getText(tN).length) throw new Error(`Invalid offset ${position.offset} for TextNode len ${getText(tN).length}`);
+        flatOffset += position.offset;
+    } else if (!currentParentNode.isLeaf) { // Element node with content
+        const content = currentParentNode.content || [];
+        if (position.offset < 0 || position.offset > content.length) throw new Error(`Invalid offset ${position.offset} for Element with ${content.length} children`);
+        for (let k = 0; k < position.offset; k++) { // Add sizes of children up to the offset (which is a child index)
+            flatOffset += content[k].nodeSize;
+        }
+    } else { // Leaf node (e.g. hard_break)
+        if (position.offset > 0) { // If offset indicates "after" the leaf node (typically offset=1 for leaf)
+            flatOffset += currentParentNode.nodeSize;
+        }
+        // If offset is 0, flatOffset already points to the start of the leaf.
+    }
     return flatOffset;
 }
 

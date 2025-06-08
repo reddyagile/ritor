@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ritor UI PoC</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+        #ritor-toolbar {
+            margin-bottom: 10px;
+            padding: 5px;
+            background-color: #eee;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        #ritor-toolbar button {
+            margin-right: 5px;
+            padding: 5px 10px;
+            border: 1px solid #ddd;
+            background-color: #fff;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        #ritor-toolbar button:hover {
+            background-color: #f0f0f0;
+        }
+        #ritor-editor-container {
+            border: 1px solid #ccc;
+            padding: 10px;
+            min-height: 200px;
+            background-color: #fff;
+            border-radius: 4px;
+        }
+        /* Basic contenteditable styling */
+        #ritor-editor-container:focus {
+            outline: none;
+            border-color: #a0a0a0;
+        }
+        #ritor-editor-container p {
+            margin-top: 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Ritor Editor - UI PoC</h1>
+
+    <div id="ritor-toolbar">
+        <button id="bold-button" title="Bold">B</button>
+        <button id="italic-button" title="Italic">I</button>
+        <button id="undo-button" title="Undo">Undo</button>
+        <button id="redo-button" title="Redo">Redo</button>
+        <button id="insert-paragraph-button" title="Insert Paragraph">New Paragraph</button>
+    </div>
+
+    <div id="ritor-editor-container" contenteditable="true">
+        <!-- Ritor editor will be initialized here by script -->
+        <p>Hello World! This is a basic Ritor PoC.</p>
+    </div>
+
+    <script type="module">
+import { RitorVDOM } from './src/RitorVDOM.js';
+import { Schema } from './src/schema.js';
+import { basicNodeSpecs, basicMarkSpecs } from './src/basicSchema.js';
+import { DocNode } from './src/documentModel.js'; // Assuming DocNode might be needed for initial content
+
+console.log("Ritor PoC JS starting...");
+
+try {
+    const editorContainer = document.getElementById('ritor-editor-container');
+    if (!editorContainer) {
+        throw new Error("Editor container #ritor-editor-container not found!");
+    }
+
+    // Initialize Schema
+    const schema = new Schema({ nodes: basicNodeSpecs, marks: basicMarkSpecs });
+
+    // Optional: Define initial document content
+    // If editorContainer has content, RitorVDOM might parse it, or we can provide a DocNode.
+    // For this PoC, let RitorVDOM parse the existing <p> or start with a default empty paragraph.
+    // To explicitly set initial content:
+    /*
+    const initialDoc = schema.node(schema.nodes.doc, {}, [
+        schema.node(schema.nodes.paragraph, {}, [
+            schema.text("Hello from JS!")
+        ])
+    ]) as DocNode;
+    editorContainer.innerHTML = ''; // Clear static HTML if providing initialDoc
+    */
+    const initialDoc = undefined; // Let RitorVDOM handle it or create its default
+
+    // Instantiate RitorVDOM
+    const editor = new RitorVDOM(editorContainer, initialDoc, schema);
+    console.log("RitorVDOM instantiated.");
+
+    // Make editor instance globally accessible for debugging if needed (optional)
+    (window as any).ritorEditor = editor;
+
+    // Toolbar button event listeners
+    const boldButton = document.getElementById('bold-button');
+    if (boldButton) {
+        boldButton.addEventListener('click', () => {
+            console.log("Bold button clicked");
+            editor.toggleMark(editor.schema.marks.bold);
+            editorContainer.focus(); // Return focus to editor
+        });
+    }
+
+    const italicButton = document.getElementById('italic-button');
+    if (italicButton) {
+        italicButton.addEventListener('click', () => {
+            console.log("Italic button clicked");
+            editor.toggleMark(editor.schema.marks.italic);
+            editorContainer.focus(); // Return focus to editor
+        });
+    }
+
+    const undoButton = document.getElementById('undo-button');
+    if (undoButton) {
+        undoButton.addEventListener('click', () => {
+            console.log("Undo button clicked");
+            editor.undo();
+            editorContainer.focus(); // Return focus to editor
+        });
+    }
+
+    const redoButton = document.getElementById('redo-button');
+    if (redoButton) {
+        redoButton.addEventListener('click', () => {
+            console.log("Redo button clicked");
+            editor.redo();
+            editorContainer.focus(); // Return focus to editor
+        });
+    }
+
+    const insertParagraphButton = document.getElementById('insert-paragraph-button');
+    if (insertParagraphButton) {
+        insertParagraphButton.addEventListener('click', () => {
+            console.log("Insert Paragraph button clicked");
+            // This is a simplified way. A more robust way might involve creating a transaction.
+            // The existing applyChange for 'insertParagraph' should work at the current selection.
+            editor.applyChange({ type: 'insertParagraph' });
+            editorContainer.focus(); // Return focus to editor
+        });
+    }
+
+    console.log("Toolbar buttons initialized.");
+
+} catch (error) {
+    console.error("Error initializing Ritor PoC:", error);
+    const errorDiv = document.createElement('div');
+    errorDiv.style.color = 'red';
+    errorDiv.textContent = 'Error initializing Ritor PoC: ' + (error as Error).message;
+    document.body.insertBefore(errorDiv, document.body.firstChild);
+}
+    </script>
+</body>
+</html>

@@ -95,71 +95,52 @@ export class ReplaceStep implements Step {
         const toParentPath = toPos.path.slice(0, -1);
 
         if (fromPos.path.length > 0 && toPos.path.length > 0 && fromParentPath.join(',') === toParentPath.join(',')) {
-            // ... (single-block inline replacement logic as before) ...
-            const parentBlockPath = fromParentPath; const parentBlockNode = nodeAtPath(doc, parentBlockPath) as BaseNode;
-            if (parentBlockNode?.content && !parentBlockNode.isLeaf && parentBlockNode.type.spec.content?.includes("inline")) {
-                const originalInlineContent = parentBlockNode.content as ReadonlyArray<BaseNode>; const fromInlineNodeIndex = fromPos.path[fromPos.path.length - 1]; const fromInlineCharOffset = fromPos.offset; const toInlineNodeIndex = toPos.path[toPos.path.length - 1]; const toInlineCharOffset = toPos.offset; const newInlineContent: BaseNode[] = []; let sliceNodes = this.slice.content as ReadonlyArray<BaseNode>;
-                for (let i = 0; i < fromInlineNodeIndex; i++) newInlineContent.push(originalInlineContent[i]);
-                const firstOriginalNode = originalInlineContent[fromInlineNodeIndex]; let textBeforeSlice = ""; let marksBeforeSlice = firstOriginalNode?.marks || [];
-                if (firstOriginalNode) { if (firstOriginalNode.isText && !firstOriginalNode.isLeaf) { marksBeforeSlice = firstOriginalNode.marks || []; if (fromInlineCharOffset > 0) textBeforeSlice = getText(firstOriginalNode).slice(0, fromInlineCharOffset); } else if (fromInlineCharOffset !== 0) return { failed: "PoC: Offset in non-text start node for inline replacement." }; }
-                if (this.slice.openStart > 0 && sliceNodes.length > 0) { const firstSliceNode = sliceNodes[0]; if (textBeforeSlice.length > 0 && firstSliceNode.isText && !firstSliceNode.isLeaf && marksEq(marksBeforeSlice, firstSliceNode.marks || [])) { const mergedStartText = textBeforeSlice + getText(firstSliceNode); newInlineContent.push(schema.text(mergedStartText, firstSliceNode.marks || [])); sliceNodes = sliceNodes.slice(1); } else { if (textBeforeSlice.length > 0) newInlineContent.push(schema.text(textBeforeSlice, marksBeforeSlice));}} else { if (textBeforeSlice.length > 0) newInlineContent.push(schema.text(textBeforeSlice, marksBeforeSlice));}
-                newInlineContent.push(...sliceNodes);
-        if (currentDebugFlag) { console.log(`[ReplaceStep] Resolved fromPos: ${JSON.stringify(fromPos)}, toPos: ${JSON.stringify(toPos)}`); }
-        if (!fromPos || !toPos) return { failed: "Invalid from/to position for ReplaceStep." };
-
-        // SINGLE-BLOCK INLINE REPLACEMENT PATH
-        const fromParentPath = fromPos.path.slice(0, -1);
-        // const toParentPath = toPos.path.slice(0, -1); // Not strictly needed due to check below
-
-        if (fromPos.path.length > 0 && toPos.path.length > 0 && fromParentPath.join(',') === toPos.path.slice(0, -1).join(',')) {
             const parentBlockPath = fromParentPath;
             const parentBlockNode = nodeAtPath(doc, parentBlockPath) as BaseNode;
-
             if (parentBlockNode?.content && !parentBlockNode.isLeaf && parentBlockNode.type.spec.content?.includes("inline")) {
                 if (currentDebugFlag) console.log("[ReplaceStep] Applying as single-block inline replacement.");
                 const originalInlineContent = parentBlockNode.content as ReadonlyArray<BaseNode>;
+                // Standardized variable names
                 const fromNodeIdxInParent = fromPos.path[fromPos.path.length - 1];
                 const fromCharOff = fromPos.offset;
                 const toNodeIdxInParent = toPos.path[toPos.path.length - 1];
                 const toCharOff = toPos.offset;
 
-                let newInlineContent: BaseNode[] = [];
-                let sliceNodesToInsert = [...this.slice.content] as InlineNode[];
+                const newInlineContent: BaseNode[] = [];
+                let sliceNodesToInsert = [...this.slice.content] as InlineNode[]; // Use this name consistently
 
-                // Add content before the replacement start point within the first affected inline node
-                for (let i = 0; i < fromNodeIdxInParent; i++) {
-                    newInlineContent.push(originalInlineContent[i]);
-                }
+                for (let i = 0; i < fromNodeIdxInParent; i++) newInlineContent.push(originalInlineContent[i]);
 
-                const firstAffectedOriginalInlineNode = originalInlineContent[fromNodeIdxInParent];
+                const firstOriginalNode = originalInlineContent[fromNodeIdxInParent];
                 let textBeforeSlice = "";
-                let marksBeforeSlice: ReadonlyArray<any> = [];
+                let marksBeforeSlice = firstOriginalNode?.marks || [];
 
-                if (firstAffectedOriginalInlineNode) {
-                    if (firstAffectedOriginalInlineNode.isText) {
-                        marksBeforeSlice = firstAffectedOriginalInlineNode.marks || [];
-                        if (fromCharOff > 0) {
-                            textBeforeSlice = getText(firstAffectedOriginalInlineNode).slice(0, fromCharOff);
-                        }
-                    } else if (fromCharOff !== 0) { // Non-text node, but offset is not 0
-                        return { failed: "ReplaceStep: Offset in non-text start node for inline replacement is not supported." };
-                    }
+                if (firstOriginalNode) {
+                    if (firstOriginalNode.isText && !firstOriginalNode.isLeaf) {
+                        marksBeforeSlice = firstOriginalNode.marks || [];
+                        if (fromCharOff > 0) textBeforeSlice = getText(firstOriginalNode).slice(0, fromCharOff);
+                    } else if (fromCharOff !== 0) return { failed: "PoC: Offset in non-text start node for inline replacement." };
                 }
+                if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] Initial textBeforeSlice: "${textBeforeSlice}"`, JSON.stringify(marksBeforeSlice));
 
-                // Attempt to merge textBeforeSlice with the start of the slice
                 if (this.slice.openStart > 0 && sliceNodesToInsert.length > 0) {
                     const firstSliceNode = sliceNodesToInsert[0];
+                    if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] Attempting merge with firstSliceNode: "${getText(firstSliceNode)}"`, JSON.stringify(firstSliceNode.marks));
                     if (textBeforeSlice.length > 0 && firstSliceNode.isText && marksEq(marksBeforeSlice, firstSliceNode.marks || [])) {
-                        textBeforeSlice += getText(firstSliceNode); // Merge
-                        sliceNodesToInsert.shift(); // Consumed
+                        // Merge textBeforeSlice with the first text node of the slice
+                        textBeforeSlice += getText(firstSliceNode);
+                        if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] Merged textBeforeSlice: "${textBeforeSlice}"`);
+                        sliceNodesToInsert.shift(); // Remove the merged first slice node
                     }
                 }
                 if (textBeforeSlice.length > 0) {
                     newInlineContent.push(schema.text(textBeforeSlice, marksBeforeSlice));
+                    if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] Pushed textBeforeSlice. newInlineContent:`, JSON.stringify(newInlineContent.map(n => getText(n))));
                 }
 
-                // Add the (remaining) slice nodes
-                newInlineContent.push(...sliceNodesToInsert);
+                if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] sliceNodesToInsert before push:`, JSON.stringify(sliceNodesToInsert.map(n => getText(n))));
+                newInlineContent.push(...sliceNodesToInsert); // Add remaining (or all) slice nodes
+                if (currentDebugFlag) console.log(`[ReplaceStep SingleBlock DEBUG] newInlineContent after pushing sliceNodesToInsert:`, JSON.stringify(newInlineContent.map(n => getText(n))));
 
                 // Add content after the replacement end point from the last affected inline node
                 const lastAffectedOriginalInlineNode = originalInlineContent[toNodeIdxInParent];
@@ -169,7 +150,7 @@ export class ReplaceStep implements Step {
                 if (lastAffectedOriginalInlineNode) {
                     if (lastAffectedOriginalInlineNode.isText) {
                         marksAfterSlice = lastAffectedOriginalInlineNode.marks || [];
-                        const originalNodeTextForAfterSlice = getText(originalInlineContent[toInlineNodeIndex]);
+                        const originalNodeTextForAfterSlice = getText(originalInlineContent[toNodeIdxInParent]);
                         if (toCharOff < originalNodeTextForAfterSlice.length) {
                             textAfterSlice = originalNodeTextForAfterSlice.slice(toCharOff);
                             if (currentDebugFlag || (this.from === 7 && this.to === 18 && parentBlockNode?.type.name === 'paragraph') ) {
@@ -183,16 +164,16 @@ export class ReplaceStep implements Step {
                     }
                 }
                 if (this.slice.openEnd > 0 && newInlineContent.length > 0 && textAfterSlice.length > 0) { const lastPushedNodeIndex = newInlineContent.length -1; const lastPushedNode = newInlineContent[lastPushedNodeIndex]; if (lastPushedNode.isText && marksEq(lastPushedNode.marks || [], marksAfterSlice)) { const mergedEndText = getText(lastPushedNode) + textAfterSlice; newInlineContent[lastPushedNodeIndex] = schema.text(mergedEndText, lastPushedNode.marks || []); textAfterSlice = ""; /*Consumed*/ } else { if (textAfterSlice.length > 0) newInlineContent.push(schema.text(textAfterSlice, marksAfterSlice));}} else { if (textAfterSlice.length > 0) newInlineContent.push(schema.text(textAfterSlice, marksAfterSlice));} // Ensure textAfterSlice is added if not merged
-                for (let i = toNodeIdxInParent + 1; i < originalInlineContent.length; i++) newInlineContent.push(originalInlineContent[i]); // Add nodes after the toNodeIdxInParent
+                for (let i = toNodeIdxInParent + 1; i < originalInlineContent.length; i++) newInlineContent.push(originalInlineContent[i]);
 
                 const normalizedNewInlineContent = normalizeInlineArray(newInlineContent as InlineNode[], schema);
                 const newParentBlock = schema.node(parentBlockNode.type, parentBlockNode.attrs, normalizedNewInlineContent, parentBlockNode.marks);
 
                 let finalDoc: DocNode | null = null;
-                if (parentBlockPath.length === 0) {
+                if (parentBlockPath.length === 0) { // Should be parentBlockPath from the correct scope
                     return { failed: "ReplaceStep: Cannot replace content of a parentless node that is not the doc itself." };
                 }
-                const newRootBaseNode = replaceNodeAtPath(doc, parentBlockPath, newParentBlock, schema);
+                const newRootBaseNode = replaceNodeAtPath(doc, parentBlockPath, newParentBlock, schema); // parentBlockPath from correct scope
 
                 if (newRootBaseNode?.type.name === doc.type.name) {
                     finalDoc = newRootBaseNode as DocNode;
@@ -205,7 +186,9 @@ export class ReplaceStep implements Step {
                 if (!finalDoc) return { failed: "ReplaceStep: Failed inline modification, finalDoc is null." };
                 return { doc: finalDoc, map: new StepMap([this.from, this.to, this.from, this.from + this.slice.size]) };
             }
+            // If parentBlockNode.content condition is false, fall through to multi-block
         }
+        // If the main single-block condition (fromPos.path.length > 0 && ...) is false, also fall through
         
         // MULTI-BLOCK REPLACEMENT PATH
         if (currentDebugFlag) console.log("[ReplaceStep] Applying as multi-block replacement.");
@@ -434,6 +417,6 @@ export class ReplaceStep implements Step {
         }
         return new ReplaceStep(this.from, this.from + this.slice.size, invertedSlice);
     }
-}
+} // Closing brace for ReplaceStep class
 
 console.log("transform/replaceStep.ts: Updated full doc replacement logic, added more logs.");
