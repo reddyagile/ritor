@@ -1,19 +1,18 @@
 // src/modules/Bold.ts
 import Ritor from '../Ritor';
 import BaseModule from './BaseModule';
-import { ModuleOptions } from '../types'; // Ensure ModuleOptions can hold formatAttributeKey
+import { ModuleOptions } from '../types';
 
 class Bold extends BaseModule {
-  // public static toolbar = '.r-bold'; // Defined in Ritor options now
-  // public static tagName = 'strong'; // Not directly used by BaseModule for formatting anymore
-  public shortcutKey = 'ctrl:KeyB.prevent'; // Shortcut handling will need adjustment
+  public shortcutKey = 'ctrl:KeyB.prevent';
 
   constructor(ritor: Ritor, options: ModuleOptions) {
-    // Options should include: { moduleName: 'bold', toolbar: '.r-bold', formatAttributeKey: 'bold' }
-    // The 'formatAttributeKey' is new and important.
-    // BaseModule expects moduleName to be part of the options passed to it.
-    super(ritor, { ...options, moduleName: 'bold', formatAttributeKey: 'bold' });
+    super(ritor, {
+      ...options, // Spread incoming options
+      toolbar: options.toolbar, // Explicitly pass toolbar from incoming options
+      moduleName: 'bold',
+      formatAttributeKey: 'bold'
+    });
   }
 }
-
 export default Bold;

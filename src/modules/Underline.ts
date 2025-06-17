@@ -7,8 +7,12 @@ class Underline extends BaseModule {
   public shortcutKey = 'ctrl:KeyU.prevent';
 
   constructor(ritor: Ritor, options: ModuleOptions) {
-    super(ritor, { ...options, moduleName: 'underline', formatAttributeKey: 'underline' });
+    super(ritor, {
+      ...options,
+      toolbar: options.toolbar, // Explicitly pass toolbar
+      moduleName: 'underline',
+      formatAttributeKey: 'underline'
+    });
   }
 }
-
 export default Underline;

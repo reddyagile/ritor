@@ -2,24 +2,31 @@
 import Ritor from '../Ritor';
 import BaseModule from './BaseModule';
 import { ModuleOptions } from '../types';
-import { DocSelection } from '../DocumentManager'; // Import DocSelection
+// DocSelection import was removed as it's not directly used here.
 
 class ClearFormat extends BaseModule {
   constructor(ritor: Ritor, options: ModuleOptions) {
-    // Provide a dummy formatAttributeKey or modify BaseModule to not require it
-    // if a module doesn't deal with a single toggleable format.
-    // Or, ClearFormat doesn't need to extend BaseModule if its behavior is too different.
-    // For now, let's assume BaseModule's click/active state isn't used by ClearFormat directly.
-    super(ritor, { ...options, moduleName: 'clearFormat', formatAttributeKey: '_clear' }); // Use a dummy key
+    super(ritor, {
+      ...options,
+      toolbar: options.toolbar, // Explicitly pass toolbar
+      moduleName: 'clearFormat'
+      // formatAttributeKey is not typically used by ClearFormat in the same way,
+      // but BaseModule expects it if its handleClick/updateActiveState were used.
+      // Since ClearFormat overrides these, it might not need a real formatAttributeKey.
+      // Passing options.formatAttributeKey (which would be undefined if not set in index.ts)
+      // or a dummy one like '_clear' (as done previously) is fine.
+      // For consistency with the pattern:
+      // formatAttributeKey: options.formatAttributeKey || '_clear_dummy',
+    });
   }
 
   // Override handleClick if BaseModule's version is not suitable
-  public handleClick() { // Renaming from 'click' to 'handleClick' for consistency
+  public handleClick() {
     const domRange = this.ritor.getCurrentDomRange();
     if (!domRange) return; // Nothing to clear if no range
 
     const docSelection = this.ritor.domRangeToDocSelection(domRange);
-    if (docSelection) { // If selection is valid (even collapsed, clear typing attrs future)
+    if (docSelection) {
         if (docSelection.length > 0) { // Only clear for actual selections for now
              this.ritor.clearFormatting(docSelection);
         } else {
@@ -34,5 +41,4 @@ class ClearFormat extends BaseModule {
     this.toggleActive(false); // ClearFormat button is not a toggle state
   }
 }
-
 export default ClearFormat;
