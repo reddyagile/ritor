@@ -1,28 +1,48 @@
+// src/EventEmitter.ts
 class EventEmitter {
-  public eventMap = new Map();
+  public eventMap = new Map<string, Set<Function>>(); // Explicitly type Map value
   constructor() {}
 
   public on(event: string, callback: Function) {
     if (!this.eventMap.has(event)) {
-      this.eventMap.set(event, new Set());
+      this.eventMap.set(event, new Set<Function>()); // Explicitly type Set
     }
-    this.eventMap.get(event).add(callback);
+    const callbacks = this.eventMap.get(event);
+    if (callbacks) { // Check if callbacks set exists
+        callbacks.add(callback);
+    }
   }
 
-  public off(event: string, callback: Function) {
+  // Changed callback to be optional
+  public off(event: string, callback?: Function) {
     if (this.eventMap.has(event)) {
-      const callbacks = this.eventMap.get(event);
-      if (callbacks.has(callback)) {
-        callbacks.delete(callback);
+      if (callback) { // If a specific callback is provided, remove only that one
+        const callbacks = this.eventMap.get(event);
+        if (callbacks && callbacks.has(callback)) {
+          callbacks.delete(callback);
+          if (callbacks.size === 0) { // Optional: remove event entry if no listeners left
+            this.eventMap.delete(event);
+          }
+        }
+      } else { // If no callback is provided, remove all listeners for the event
+        this.eventMap.delete(event);
       }
     }
   }
 
-  public emit<T>(event: string, ...data: T[]) {
+  // Changed generic <T> and T[] to any[] for data
+  public emit(event: string, ...data: any[]) {
     if (this.eventMap.has(event)) {
-      this.eventMap.get(event).forEach((callback: Function) => {
-        setTimeout(() => callback(...data), 0);
-      });
+      const callbacks = this.eventMap.get(event);
+      if (callbacks) { // Check if callbacks set exists
+          callbacks.forEach((cb: Function) => { // cb explicitly Function
+            // setTimeout(() => cb(...data), 0); // Original
+            // Safer call if cb might not be defined, though Set should not store undefined
+            if (typeof cb === 'function') {
+                setTimeout(() => cb(...data), 0);
+            }
+          });
+      }
     }
   }
 }

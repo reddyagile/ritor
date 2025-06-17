@@ -262,9 +262,10 @@ class DocumentManager {
 
   // Retrieves the formatting attributes at the current DocSelection
   // This is a simplified version.
-  public getFormatAt(selection: DocSelection): OpAttributes {
+  public getFormatAt(selection: DocSelection): OpAttributesType {
     const docDelta = this.currentDocument.getDelta();
-    if (!docDelta.ops) return {};
+    // Handle cases where docDelta or docDelta.ops might be null/undefined if necessary
+    if (!docDelta || !docDelta.ops) return {};
 
     let index = selection.index;
     if (selection.length > 0) {
