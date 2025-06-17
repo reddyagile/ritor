@@ -8,7 +8,6 @@ class ClearFormat extends BaseModule {
   constructor(ritor: Ritor, options: ModuleOptions) {
     super(ritor, {
       ...options,
-      toolbar: options.toolbar, // Explicitly pass toolbar
       moduleName: 'clearFormat'
       // formatAttributeKey is not typically used by ClearFormat in the same way,
       // but BaseModule expects it if its handleClick/updateActiveState were used.

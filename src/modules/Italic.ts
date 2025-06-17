@@ -9,7 +9,6 @@ class Italic extends BaseModule {
   constructor(ritor: Ritor, options: ModuleOptions) {
     super(ritor, {
       ...options,
-      toolbar: options.toolbar, // Explicitly pass toolbar
       moduleName: 'italic',
       formatAttributeKey: 'italic'
     });

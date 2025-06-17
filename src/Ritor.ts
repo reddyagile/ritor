@@ -12,10 +12,9 @@ import { Document, OpAttributes } from './Document';
 class Ritor extends EventEmitter {
   private static modules = new Map();
   private domEventMap = new Map();
-  private options: RitorOptions = {
-    modules: {},
-  };
-  private shortcuts: Map<string, string> = new Map(); // Map of key combo to moduleName
+  // `options` will hold the merged configuration.
+  private options: RitorOptions; // No longer initialized here with a default.
+  private shortcuts: Map<string, string> = new Map();
   private initialized: boolean;
 
   public $el: HTMLElement;
@@ -23,29 +22,33 @@ class Ritor extends EventEmitter {
   private docManager: DocumentManager;
   private renderer: Renderer;
 
-  constructor(target: string, options?: RitorOptions) {
+  constructor(target: string, userProvidedOptions?: RitorOptions) { // Renamed to userProvidedOptions for clarity
     super();
 
     if (!target) throw new Error('Target selector is required.');
-
     const targetElem = document.querySelector(target) as HTMLElement;
     if (!targetElem) throw new Error('Target element not found.');
-
     this.$el = targetElem;
 
-    if (isObject(options)) {
-      this.options = Object.assign({}, this.options, options);
-    }
-    this.options.modules = Object.assign(
-      {},
-      isObject(this.options.modules) ? this.options.modules : {},
-      this.initializeDefaultModules(),
-    );
+    // Define Ritor's internal defaults, especially for the modules object.
+    const defaultInternalOptions: RitorOptions = { modules: {} };
+    // Merge user-provided options into these defaults. User options take precedence.
+    this.options = Object.assign({}, defaultInternalOptions, userProvidedOptions);
+    // Ensure this.options.modules itself is an object, even if userProvidedOptions was undefined or had no modules key.
+    this.options.modules = this.options.modules || {};
+
+    // Call initializeDefaultModules primarily for Ritor.register.
+    // It no longer returns a conflicting module configuration.
+    this.initializeDefaultModules();
+
     this.docManager = new DocumentManager(this);
     this.renderer = new Renderer(this);
+
+    // initializeModules will now use the correctly merged this.options.modules
     this.initializeModules();
-    this.registerModuleShortcuts(); // Register shortcuts after modules are initialized
-    this.init(); // init sets up DomEvents listeners, including the one that emits 'keydown'
+
+    this.registerModuleShortcuts();
+    this.init();
     this.initialized = true;
     this.emit('editor:init'); // Initial event
 
@@ -73,12 +76,12 @@ class Ritor extends EventEmitter {
   }
 
   private initializeDefaultModules() {
-    const config: { [key: string]: {} } = {};
+    // This method should ONLY register modules. It should NOT return a config.
     for (const [key, module] of Object.entries(defaultModules)) {
-      Ritor.register(key, module);
-      config[key] = {};
+      if (!Ritor.modules.has(key)) { // Optional: prevent re-registering if called multiple times
+         Ritor.register(key, module);
+      }
     }
-    return config;
   }
 
   public static register<T>(moduleName: string, module: Module<T>) {
@@ -107,32 +110,31 @@ class Ritor extends EventEmitter {
     }
   }
 
-  private initializeModules() { // Ensure this method exists and is called
-    const modules = this.options.modules;
-    modules &&
-      Object.keys(modules).forEach((moduleName) => {
-        const moduleConfig = Ritor.modules.get(moduleName); // Get from static registry
-        if (moduleConfig && moduleConfig.moduleClass) {
-          // Pass the specific module options from Ritor's options
-          const moduleSpecificOptions = modules[moduleName] || {}; // User options for this instance
+  private initializeModules() {
+    const modulesConfig = this.options.modules; // This should now be the user's config from index.ts
+    modulesConfig &&
+      Object.keys(modulesConfig).forEach((moduleName) => {
+        const moduleStaticConfig = Ritor.modules.get(moduleName);
+        if (moduleStaticConfig && moduleStaticConfig.moduleClass) {
+          const userModuleOptions = modulesConfig[moduleName] || {}; // This IS the config from index.ts for this module
 
-          // Prioritize shortcut from user options, then from module's static property
-          let shortcutKey = moduleSpecificOptions.shortcutKey;
-          if (!shortcutKey && moduleConfig.moduleClass.hasOwnProperty('shortcutKey')) {
-            shortcutKey = (moduleConfig.moduleClass as any).shortcutKey;
-          } else if (!shortcutKey && moduleConfig.moduleClass.prototype.hasOwnProperty('shortcutKey')) {
-            // Check prototype if it's an instance property on the class, though static is preferred
-             shortcutKey = (moduleConfig.moduleClass.prototype as any).shortcutKey;
+          let shortcutKey = userModuleOptions.shortcutKey;
+          // ... (shortcut key fallback logic remains same) ...
+          if (!shortcutKey && moduleStaticConfig.moduleClass.hasOwnProperty('shortcutKey')) {
+            shortcutKey = (moduleStaticConfig.moduleClass as any).shortcutKey;
+          } else if (!shortcutKey && moduleStaticConfig.moduleClass.prototype.hasOwnProperty('shortcutKey')) {
+             shortcutKey = (moduleStaticConfig.moduleClass.prototype as any).shortcutKey;
           }
 
-
+          // userModuleOptions already contains moduleName if provided from index.ts,
+          // and also toolbar, etc.
           const fullModuleOptions: ModuleOptions = {
-            ...moduleSpecificOptions, // User-provided options for this module instance
-            moduleName: moduleName, // Ensure moduleName is part of options passed to BaseModule
-            shortcutKey: shortcutKey, // Explicitly set shortcutKey
+            ...userModuleOptions, // This contains toolbar, moduleName (from index.ts)
+            moduleName: moduleName, // Ensures moduleName is the key from the loop (consistent)
+            shortcutKey: shortcutKey, // Resolved shortcutKey
           };
 
-          this.moduleInstances.set(moduleName, new moduleConfig.moduleClass(this, fullModuleOptions));
+          this.moduleInstances.set(moduleName, new moduleStaticConfig.moduleClass(this, fullModuleOptions));
         }
       });
   }

@@ -8,9 +8,8 @@ class Bold extends BaseModule {
 
   constructor(ritor: Ritor, options: ModuleOptions) {
     super(ritor, {
-      ...options, // Spread incoming options
-      toolbar: options.toolbar, // Explicitly pass toolbar from incoming options
-      moduleName: 'bold',
+      ...options, // This options object should now correctly contain 'toolbar'
+      moduleName: 'bold', // Overrides if 'moduleName' was in options, which is fine
       formatAttributeKey: 'bold'
     });
   }

@@ -9,7 +9,6 @@ class Underline extends BaseModule {
   constructor(ritor: Ritor, options: ModuleOptions) {
     super(ritor, {
       ...options,
-      toolbar: options.toolbar, // Explicitly pass toolbar
       moduleName: 'underline',
       formatAttributeKey: 'underline'
     });
