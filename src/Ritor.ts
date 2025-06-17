@@ -50,8 +50,6 @@ class Ritor extends EventEmitter {
     this.emit('editor:init'); // Initial event
 
     // Listen for document changes to re-render
-    // Remove old listener if any to be safe, then add the new one
-    this.off('document:change');
     this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => { // newSelection is optional
       if (this.renderer && newDoc) {
         this.renderer.render(newDoc); // Render the new document
