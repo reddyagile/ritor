@@ -198,7 +198,7 @@ class DocumentManager {
     this.ritor.emit('document:change', this.currentDocument, newSelection);
   }
 
-  public formatText(attributes: OpAttributesType, selection: DocSelection) { // Changed here
+  public formatText(attributes: OpAttributesType, selection: DocSelection) {
     const currentDoc = this.getDocument();
     // selection is now guaranteed to be provided by Ritor and is non-null.
     // Ritor also ensures selection.length > 0 for formatting.
@@ -282,7 +282,7 @@ class DocumentManager {
       if (op.insert) {
         const opLength = op.insert.length;
         if (index >= currentPosition && index < currentPosition + opLength) {
-          return op.attributes || {};
+          return op.attributes || {}; // op.attributes is already OpAttributesType | undefined
         }
         currentPosition += opLength;
       } else if (op.retain) {
@@ -293,7 +293,7 @@ class DocumentManager {
           // If op.attributes is undefined, it means no attribute change here.
           // We need to find the *effective* attributes. This requires iterating and merging.
           // This simplified version just returns attributes of the op AT the index.
-          return op.attributes || {};
+          return op.attributes || {}; // op.attributes is already OpAttributesType | undefined
         }
         currentPosition += opLength;
       }
@@ -335,107 +335,105 @@ class DocumentManager {
       this.ritor.emit('document:change', this.currentDocument, newSelection);
   }
 
-  // Basic compose function (will need to be more robust)
-  // This is a simplified version of what a full Delta library provides.
   public compose(deltaA: Delta, deltaB: Delta): Delta {
-     // This is a placeholder for a proper delta composition algorithm.
-     // A full implementation is complex. For now, we'll do a naive merge
-     // which might not be correct for all cases but will allow progress.
-     // It assumes deltaB's operations are relative to the state AFTER deltaA.
-     // This is more like `concat` if ops are already transformed.
-     // A true compose needs to handle overlapping ops, deletes, inserts, retains with attributes.
+    const opsA = deltaA.ops;
+    const opsB = deltaB.ops;
+    const resultOps: Op[] = [];
+    const iterA = new DeltaIterator(opsA);
+    const iterB = new DeltaIterator(opsB);
 
-     // For instance, Quill Delta's compose method:
-     // https://github.com/quilljs/delta/blob/master/src/Delta.ts#Lcompose
-     // It's a non-trivial piece of logic.
+    while (iterA.hasNext() || iterB.hasNext()) {
+      const peekA = iterA.peek();
+      const peekB = iterB.peek();
+      const typeA = iterA.peekType();
+      const typeB = iterB.peekType();
 
-     // Temporary naive approach: just apply B's ops to the "end" of A's effective content.
-     // This is not a general solution.
-     const newDelta = new Delta(deltaA.ops); // Start with A
-
-     // A very basic strategy: If B has inserts, try to place them.
-     // If B has deletes or retains, they need to be relative to A's output.
-     // This is where it gets complex.
-
-     // For this subtask, we'll return a delta that attempts to naively merge.
-     // This will be replaced by a robust implementation or library.
-
-     // Example: if A = insert("Hello"), B = retain(5, {bold:true}) -> insert("Hello", {bold:true})
-     // Example: if A = insert("HelloWorld"), B = delete(5) starting at index 0 -> insert("World")
-
-     // The current methods (insertText, formatText, deleteText) construct `change` deltas
-     // that are meant to be composed with the current document state.
-     // So, `deltaA` is the current document, `deltaB` is the change.
-
-     // A truly robust `compose` is beyond a quick implementation here.
-     // We will use this placeholder and refine it or integrate a library.
-     // For now, let's assume deltaB is already correctly transformed to apply to deltaA.
-     // This means the `ops` in `deltaB` are directly applicable.
-
-     // Let's return a new Delta that is the result of applying B to A.
-     // This is still highly conceptual without the full algorithm.
-     // The methods `insertText`, `formatText`, `deleteText` create `change` Delta
-     // that are "ready to be composed".
-
-     // The simplest (but often incorrect) approach if B is a "change" delta:
-     let resultOps: Op[] = [];
-     const aIter = new DeltaIterator(deltaA.ops);
-     const bIter = new DeltaIterator(deltaB.ops);
-
-     while(aIter.hasNext() || bIter.hasNext()) {
-         if (bIter.peekType() === 'insert') {
-             resultOps.push(bIter.next());
-         } else if (aIter.peekType() === 'delete') {
-             aIter.next(); // Skip deleted part of A
-         } else if (bIter.peekType() === 'delete') {
-             const opB = bIter.next(); // opB is a delete op
-             let lenToDelete = opB.delete || 0;
-             while(lenToDelete > 0 && aIter.hasNext() && aIter.peekType() !== 'delete') {
-                 const opA = aIter.next(lenToDelete); // consume part of A
-                 if(opA.retain) { // if opA was a retain
-                     lenToDelete -= opA.retain;
-                 } else if (opA.insert) { // if opA was an insert
-                      lenToDelete -= opA.insert.length;
-                      if(lenToDelete < 0) { // partially deleted insert
-                         resultOps.push({ insert: opA.insert.substring(0, opA.insert.length + lenToDelete) });
-                      }
-                 }
-             }
-         } else if (aIter.hasNext() && bIter.hasNext() && aIter.peekType() === 'retain' && bIter.peekType() === 'retain') {
-            const opA = aIter.peek();
-            const opB = bIter.peek();
-
-            // Explicit null checks for opA and opB
-            if (opA && opB && typeof opA.retain === 'number' && typeof opB.retain === 'number') {
-                const length = Math.min(opA.retain, opB.retain); // No need for || 0 if types are numbers
-
-                const attrs = OpAttributeComposer.compose(opA.attributes, opB.attributes);
-                resultOps.push({ retain: length, attributes: attrs });
-                aIter.next(length);
-                bIter.next(length);
-            } else {
-                // This case should ideally not be reached if peekType and hasNext are correct.
-                // If opA or opB is null here, or not a retain op, something is wrong with iterator logic
-                // or the assumption that peekType guarantees the op structure.
-                // For safety, advance one of the iterators to prevent infinite loop if possible.
-                if (aIter.hasNext()) aIter.next(); else if (bIter.hasNext()) bIter.next(); else break;
+      if (typeB === 'insert') {
+        const op = iterB.next(); // next() should return a valid Op
+        if (op) resultOps.push(op); // Check if op is not null/undefined, though next() implies it is
+      } else if (typeA === 'delete') { // Not relevant for applying format, but part of general compose
+        iterA.next();
+      } else if (typeB === 'delete') { // Deletes from deltaB take precedence
+        const bOp = iterB.next();
+        if (bOp && typeof bOp.delete === 'number') {
+            let lengthToDelete = bOp.delete;
+            while (lengthToDelete > 0 && iterA.hasNext()) {
+                const aOp = iterA.next(lengthToDelete); // Consume from A
+                if (!aOp) break;
+                if (aOp.retain) lengthToDelete -= aOp.retain;
+                else if (aOp.insert) lengthToDelete -= aOp.insert.length;
+                // If aOp.insert was partially deleted, the remainder is dropped here.
+                // A full compose would handle this more carefully.
             }
-         } else if (aIter.hasNext()) {
-             const op = aIter.next();
-             if (op) resultOps.push(op);
-         } else if (bIter.hasNext()) {
-            const op = bIter.next();
-            // Only push if it's a meaningful operation to append here.
-            // Typically, remaining ops in B should be inserts if A is exhausted.
-            // Or if B's ops were already transformed to be applicable.
-            if (op && (op.insert || (op.retain && op.attributes))) {
-                 resultOps.push(op);
-            }
-         } else {
-            break;
-         }
-     }
-     return new Delta(resultOps);
+        }
+      } else if (typeA === 'retain' && typeB === 'retain') {
+        if (!peekA || !peekB) break; // Should not happen if hasNext is true
+
+        // Explicit null checks for opA and opB (peekA and peekB)
+        if (typeof peekA.retain === 'number' && typeof peekB.retain === 'number') {
+            const length = Math.min(peekA.retain, peekB.retain);
+            const attributes = OpAttributeComposer.compose(peekA.attributes, peekB.attributes);
+            if (length > 0) resultOps.push({ retain: length, attributes });
+            iterA.next(length);
+            iterB.next(length);
+        } else {
+            // Fallback if retain values are not numbers (should not happen with valid ops)
+            if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break;
+        }
+
+      } else if (typeA === 'insert' && typeB === 'retain') {
+        if (!peekA || !peekB) break; // Should not happen
+        const aOp = peekA; // This is an insert op
+        const bOp = peekB; // This is a retain op (potentially with attributes)
+
+        if (typeof aOp.insert !== 'string' || typeof bOp.retain !== 'number') { // Type guard
+             if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; // Safety break
+             continue;
+        }
+
+        const aLen = OpUtils.getOpLength(aOp);
+        const bLen = OpUtils.getOpLength(bOp);
+        const length = Math.min(aLen, bLen);
+
+        if (length > 0) {
+            const attributes = OpAttributeComposer.compose(aOp.attributes, bOp.attributes);
+            resultOps.push({ insert: aOp.insert!.substring(0, length), attributes: attributes });
+
+            // Produces ops that are sliced correctly for iterators
+            iterA.next(length); // Consume 'length' from aOp.insert
+            iterB.next(length); // Consume 'length' from bOp.retain
+        } else { // length is 0, advance one to prevent infinite loop
+            if (bLen === 0) iterB.next(); else if (aLen === 0) iterA.next(); else { iterA.next(); iterB.next(); }
+        }
+
+      } else if (typeA === 'insert') { // If deltaB has no more ops or non-matching op
+        const op = iterA.next();
+        if (op) resultOps.push(op);
+      } else if (typeA === 'retain' && typeB === null) { // deltaB is exhausted
+        const op = iterA.next();
+        if (op) resultOps.push(op);
+      }
+      // If typeB is 'retain' but typeA is not 'insert' or 'retain',
+      // and typeA is not 'delete', it's tricky.
+      // A simple approach for now if iterA is exhausted but iterB has retains:
+      else if (typeB === 'retain' && typeA === null && peekB && peekB.attributes) {
+        // This might happen if deltaB tries to format past the end of deltaA.
+        // Only push if it has attributes, otherwise it's a meaningless retain.
+        const op = iterB.next();
+        if (op) resultOps.push(op);
+      }
+      else if (iterA.hasNext()) { // Fallback to consume A if B doesn't match expected pattern
+          const op = iterA.next();
+          if (op) resultOps.push(op);
+      } else if (iterB.hasNext()) { // Fallback to consume B (should mostly be inserts)
+          const op = iterB.next();
+          if (op) resultOps.push(op);
+      }
+      else { // Both exhausted
+          break;
+      }
+    }
+    return new Delta(resultOps);
   }
 }
 

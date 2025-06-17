@@ -67,4 +67,10 @@ function init() {
     ritor.reInit();
   });
 }
-init();
+
+// Defer initialization until the DOM is ready
+if (document.readyState === 'loading') {  // Loading hasn't finished yet
+  document.addEventListener('DOMContentLoaded', init);
+} else {  // `DOMContentLoaded` has already fired
+  init();
+}
