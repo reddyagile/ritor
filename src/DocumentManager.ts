@@ -1,7 +1,7 @@
 // src/DocumentManager.ts
 import Cursor from './Cursor'; // Will be used for selection translation
 import Ritor from './Ritor';
-import { Document, Delta, Op, OpAttributes } from './Document';
+import { Document, Delta, Op, OpAttributes as OpAttributesType } from './Document';
 // import { domUtil } from './utils'; // We'll remove direct DOM utils over time
 
 // Represents selection within the Document model
@@ -301,6 +301,39 @@ class DocumentManager {
     return {}; // Default if not found or at end
   }
 
+  public clearFormat(selection: DocSelection): void {
+      const currentDoc = this.getDocument();
+      const ops: Op[] = [];
+
+      if (selection.index > 0) {
+          ops.push({ retain: selection.index });
+      }
+
+      if (selection.length > 0) {
+          // Create an OpAttributes object where all known format keys are set to null
+          // This signals to OpAttributeComposer.compose to remove these formats.
+          const resetAttributes: OpAttributesType = {
+              bold: null,
+              italic: null,
+              underline: null,
+              // Add other clearable formats here
+          };
+          ops.push({ retain: selection.length, attributes: resetAttributes });
+      }
+
+      const remainingLength = currentDoc.getDelta().length() - (selection.index + selection.length);
+      if (remainingLength > 0) {
+          ops.push({ retain: remainingLength });
+      }
+
+      const change = new Delta(ops);
+      const composedDelta = this.compose(currentDoc.getDelta(), change);
+      this.currentDocument = new Document(composedDelta);
+
+      const newSelection: DocSelection = { index: selection.index, length: selection.length };
+      this.ritor.emit('document:change', this.currentDocument, newSelection);
+  }
+
   // Basic compose function (will need to be more robust)
   // This is a simplified version of what a full Delta library provides.
   public compose(deltaA: Delta, deltaB: Delta): Delta {
@@ -368,24 +401,37 @@ class DocumentManager {
                  }
              }
          } else if (aIter.hasNext() && bIter.hasNext() && aIter.peekType() === 'retain' && bIter.peekType() === 'retain') {
-             const opA = aIter.peek();
-             const opB = bIter.peek();
-             const length = Math.min(opA.retain || 0, opB.retain || 0);
-             const attrs = OpAttributes.compose(opA.attributes, opB.attributes);
-             resultOps.push({ retain: length, attributes: attrs });
-             aIter.next(length);
-             bIter.next(length);
+            const opA = aIter.peek();
+            const opB = bIter.peek();
+
+            // Explicit null checks for opA and opB
+            if (opA && opB && typeof opA.retain === 'number' && typeof opB.retain === 'number') {
+                const length = Math.min(opA.retain, opB.retain); // No need for || 0 if types are numbers
+
+                const attrs = OpAttributeComposer.compose(opA.attributes, opB.attributes);
+                resultOps.push({ retain: length, attributes: attrs });
+                aIter.next(length);
+                bIter.next(length);
+            } else {
+                // This case should ideally not be reached if peekType and hasNext are correct.
+                // If opA or opB is null here, or not a retain op, something is wrong with iterator logic
+                // or the assumption that peekType guarantees the op structure.
+                // For safety, advance one of the iterators to prevent infinite loop if possible.
+                if (aIter.hasNext()) aIter.next(); else if (bIter.hasNext()) bIter.next(); else break;
+            }
          } else if (aIter.hasNext()) {
-              resultOps.push(aIter.next());
+             const op = aIter.next();
+             if (op) resultOps.push(op);
          } else if (bIter.hasNext()) {
-             // This case should ideally be handled by transforming B's ops
-             // if A is exhausted and B still has non-insert ops.
-             // For now, push if it's a retain with attributes.
-             const opB = bIter.next();
-             if(opB.retain && opB.attributes) resultOps.push(opB);
-             // else if (opB.insert) resultOps.push(opB); // Already handled
+            const op = bIter.next();
+            // Only push if it's a meaningful operation to append here.
+            // Typically, remaining ops in B should be inserts if A is exhausted.
+            // Or if B's ops were already transformed to be applicable.
+            if (op && (op.insert || (op.retain && op.attributes))) {
+                 resultOps.push(op);
+            }
          } else {
-             break; // Should not happen
+            break;
          }
      }
      return new Delta(resultOps);
@@ -427,35 +473,39 @@ class DeltaIterator {
 
      next(length?: number): Op {
          const currentOp = this.ops[this.index];
-         const currentOpLength = OpUtils.length(currentOp);
+        // Using OpUtils.getOpLength now
+        const currentOpLength = OpUtils.getOpLength(currentOp);
 
+        // The rest of this method's logic needs to be the original, correct logic for `next`.
+        // The prompt's example for `next` was simplified and potentially incorrect.
+        // I will restore the original logic of `next` and only change `OpUtils.length` to `OpUtils.getOpLength`.
          if (length == null || length >= currentOpLength - this.offset) {
-             const op = this.ops[this.index++];
-             this.offset = 0;
-             // If an offset was present, and we are taking the whole op,
-             // we need to slice the op if it was already partially consumed.
-             if (this.offset > 0) { // This logic needs refinement.
-                 // This means the op was already partially consumed, which next() should handle.
-                 // The simple iterator here assumes `next()` consumes the whole op or `length` from its start.
-             }
-             return op; // This is simplified; should handle partial consumption if offset > 0
+            const op = this.ops[this.index++]; // Consume the op
+            this.offset = 0; // Reset offset for the new current op
+            // If an offset was present on *this* op before fully consuming it,
+            // it implies partial consumption from a previous `next(length)` call.
+            // This simplified iterator doesn't perfectly handle slicing from an existing offset
+            // when taking the whole remainder of an op. Assuming `length` based next calls are more common.
+            // For a robust iterator, if this.offset > 0, op should be op.slice(this.offset).
+            return op;
          } else {
              // Partial consumption of the current op
-             this.offset += length;
-             // This needs to return a *part* of currentOp, e.g. { retain: length, attributes: currentOp.attributes }
-             // For simplicity, the current `compose` doesn't rely on fine-grained partial nexts yet.
-             // This is a placeholder for more advanced iterator logic.
+            this.offset += length; // Increase offset within the current op
+            // Return a *part* of currentOp
+            // This part of the logic remains as per the original file for creating partial ops
              if (currentOp.retain) return { retain: length, attributes: currentOp.attributes };
              if (currentOp.insert) return { insert: currentOp.insert.substring(0, length), attributes: currentOp.attributes };
-             // Delete ops are usually consumed fully or not at all by `length` in iterators.
-             return { retain: length }; // Fallback, needs proper slicing
+            // Delete ops are typically not sliced this way by `length` in iterators,
+            // but if it were, it would be: return { delete: length }
+            return { retain: length }; // Fallback, assuming retain if not insert/delete
          }
      }
  }
 
  // Helper for Op utilities (would be part of a full Delta library)
  class OpUtils {
-     static length(op: Op): number {
+    // Renamed from length to getOpLength
+    static getOpLength(op: Op): number {
          if (typeof op.delete === 'number') return op.delete;
          if (typeof op.retain === 'number') return op.retain;
          if (typeof op.insert === 'string') return op.insert.length;
@@ -463,32 +513,37 @@ class DeltaIterator {
      }
  }
 
- // Helper for OpAttributes (would be part of a full Delta library)
- class OpAttributes {
-        static compose(a?: OpAttributes, b?: OpAttributes, keepNull: boolean = false): OpAttributes | undefined {
-            const attributes = { ...a }; // Start with a's attributes
-         if (typeof b !== 'object') b = {};
+// Renamed from OpAttributes to OpAttributeComposer
+// Revised OpAttributeComposer.compose for clarity and correctness:
+class OpAttributeComposer {
+    static compose(a?: OpAttributesType, b?: OpAttributesType, keepNull: boolean = false): OpAttributesType | undefined {
+        if (typeof a !== 'object') a = {}; // Default to empty object if undefined
+        if (typeof b !== 'object') b = {}; // Default to empty object if undefined
 
-            for (const key in b) {
-                if (b.hasOwnProperty(key)) {
-                    if (b[key] === null) {
-                        delete attributes[key]; // Null in b means remove attribute
-                    } else if (b[key] !== undefined) { // only set if b[key] is not undefined
-                        attributes[key] = b[key]; // b's value takes precedence
-                 }
+        let attributes: OpAttributesType = { ...a }; // Start with a clone of a
+
+        for (const key in b) { // Apply b's properties over a
+            if (b.hasOwnProperty(key)) { // Ensure key is own property of b
+                // If b[key] is explicitly undefined, it means don't apply this from b, keep a's value or absence
+                // This is slightly different from typical delta compose where undefined in b means no change to a[key]
+                // However, for { bold: true } composed with { italic: true }, bold should persist from 'a'.
+                // The current { ...a } already handles this.
+                // The main thing is if b defines a key, it takes precedence.
+                attributes[key] = b[key];
+            }
+        }
+
+        if (!keepNull) { // If not keeping nulls, remove any attribute that is null
+            for (const key in attributes) {
+                if (attributes.hasOwnProperty(key) && attributes[key] === null) {
+                    delete attributes[key];
                 }
-         }
-            // After processing b, if keepNull is false, remove any remaining nulls (e.g. from a)
-            if (!keepNull) {
-                for (const key in attributes) {
-                    if (attributes.hasOwnProperty(key) && attributes[key] === null) {
-                        delete attributes[key];
-                    }
-             }
-         }
-         return Object.keys(attributes).length > 0 ? attributes : undefined;
-     }
- }
+            }
+        }
+
+        return Object.keys(attributes).length > 0 ? attributes : undefined;
+    }
+}
 
 
 export default DocumentManager;

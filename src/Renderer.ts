@@ -142,4 +142,53 @@ export class Renderer {
 
     return [topNode];
   }
+
+  public static deltaToHtml(delta: Delta): string {
+    if (!delta || !delta.ops) {
+      return '';
+    }
+
+    let html = '';
+    delta.ops.forEach(op => {
+      if (op.insert) {
+        let text = op.insert;
+        // Basic text escaping (very minimal, consider a library for robust escaping)
+        text = text.replace(/&/g, '&amp;')
+                   .replace(/</g, '&lt;')
+                   .replace(/>/g, '&gt;')
+                   .replace(/"/g, '&quot;')
+                   .replace(/'/g, '&#39;');
+
+        // Replace newlines with <br> for simple HTML representation
+        // More complex block handling would require different logic
+        text = text.replace(/\n/g, '<br>');
+
+
+        if (op.attributes) {
+          let currentText = text;
+          // Apply attributes by wrapping in tags (simplified, order might matter for nesting)
+          for (const attrKey in op.attributes) {
+            if (op.attributes.hasOwnProperty(attrKey) && op.attributes[attrKey]) {
+              const tagName = ATTRIBUTE_TO_TAG_MAP[attrKey];
+              if (tagName) {
+                if (op.attributes[attrKey] === true) { // Boolean attributes
+                  currentText = `<${tagName}>${currentText}</${tagName}>`;
+                }
+                // Add handling for attributes with values like links if needed
+                // else if (tagName === 'A' && typeof op.attributes[attrKey] === 'string') {
+                //   currentText = `<${tagName} href="${op.attributes[attrKey]}">${currentText}</${tagName}>`;
+                // }
+              }
+            }
+          }
+          html += currentText;
+        } else {
+          html += text;
+        }
+      }
+      // Delete and retain ops are not directly converted to HTML string in this context,
+      // as the input delta should represent the final content.
+    });
+    return html;
+  }
 }

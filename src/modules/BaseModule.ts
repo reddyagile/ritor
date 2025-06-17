@@ -2,7 +2,7 @@
 import Ritor from '../Ritor';
 import { ModuleOptions } from '../types';
 import { domUtil } from '../utils'; // Keep for toolbar class manipulation
-import { DocSelection } from '../DocumentManager'; // Import DocSelection
+// import { DocSelection } from '../DocumentManager'; // DocSelection is used via Ritor methods
 import { OpAttributes } from '../Document'; // Import OpAttributes
 
 class BaseModule {
@@ -36,39 +36,23 @@ class BaseModule {
 
   // Handles toolbar button click
   public handleClick() {
-    if (this.options.formatAttributeKey && this.ritor.docManager) {
-      const attributeKey = this.options.formatAttributeKey; // e.g., "bold"
+    if (this.options.formatAttributeKey && this.ritor) { // Added null check for ritor
+      const attributeKey = this.options.formatAttributeKey;
 
-      // Get current DOM selection and convert to DocSelection
-      const domRange = this.ritor.docManager.cursor.getRange();
-      if (!domRange) return;
+      const domRange = this.ritor.getCurrentDomRange();
+      if (!domRange || domRange.collapsed) return;
 
-      // Don't apply format if selection is collapsed (typical editor behavior for toggles)
-      // Some editors allow setting typing attributes on collapsed selection.
-      // For a simple toggle, we usually require a range.
-      if (domRange.collapsed) {
-          // Optionally, handle "typing attributes" here in the future
-          // For now, if collapsed, maybe do nothing or toggle a "typing" state.
-          // Let's assume for now we only format ranges.
-          // If you want to toggle for typing:
-          // const currentAttrs = this.ritor.docManager.getTypingAttributes(); // Needs implementation
-          // const newAttrs = { ...currentAttrs, [attributeKey]: !currentAttrs[attributeKey] };
-          // this.ritor.docManager.setTypingAttributes(newAttrs);
-          // this.updateActiveState(); // update based on typing attributes
-          return;
-      }
-
-      const docSelection = this.ritor.docManager.domRangeToDocSelection(domRange);
+      const docSelection = this.ritor.domRangeToDocSelection(domRange);
       if (!docSelection || docSelection.length === 0) return;
 
-      // Determine if we are adding or removing the format.
-      // Check the current format at the selection.
-      const currentFormats = this.ritor.docManager.getFormatAt(docSelection);
-      const shouldApplyFormat = !currentFormats[attributeKey]; // Toggle logic
+      const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection); // Explicitly type
+      const isCurrentlyActive = !!currentFormats[attributeKey];
 
-      const formatToApply: OpAttributes = { [attributeKey]: shouldApplyFormat ? true : null }; // Use null to remove attribute
+      // If toggling off, value is null. If toggling on, value is true.
+      const formatValue = isCurrentlyActive ? null : true;
+      const formatToApply: OpAttributes = { [attributeKey]: formatValue };
 
-      this.ritor.applyFormat(formatToApply); // Ritor's applyFormat will use its docManager
+      this.ritor.applyFormat(formatToApply);
     }
   }
 
@@ -85,28 +69,27 @@ class BaseModule {
 
   // Updates the active state of the toolbar button based on current selection format
   public updateActiveState() {
-    if (!this.ritor.docManager || !this.options.formatAttributeKey) {
+    if (!this.options.formatAttributeKey || !this.ritor) { // Added null check for ritor
       this.toggleActive(false);
       return;
     }
 
-    const domRange = this.ritor.docManager.cursor.getRange();
-    // Do not try to update if cursor is not in editor.
-    if (!domRange || !this.ritor.docManager.cursor.isWithin(this.ritor.$el)) {
+    const domRange = this.ritor.getCurrentDomRange();
+    const docManager = this.ritor.getDocumentManager(); // Get manager for isWithin check
+
+    if (!domRange || (docManager && !docManager.cursor.isWithin(this.ritor.$el))) {
         this.toggleActive(false);
         return;
     }
 
-    const docSelection = this.ritor.docManager.domRangeToDocSelection(domRange);
+    const docSelection = this.ritor.domRangeToDocSelection(domRange);
     if (!docSelection) {
       this.toggleActive(false);
       return;
     }
 
-    // If selection is collapsed, check "typing attributes" (future) or format of char before.
-    // For now, let's use getFormatAt which has some logic for collapsed selections.
-    const formats = this.ritor.docManager.getFormatAt(docSelection);
-    const attributeKey = this.options.formatAttributeKey; // e.g., "bold"
+    const formats: OpAttributes = this.ritor.getFormatAt(docSelection); // Explicitly type
+    const attributeKey = this.options.formatAttributeKey;
     this.toggleActive(!!formats[attributeKey]);
   }
 }

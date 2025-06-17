@@ -5,8 +5,9 @@ import EventEmitter from './EventEmitter';
 import { Module, RitorOptions } from './types';
 import { Renderer } from './Renderer';
 import { isObject } from './utils';
-import { DocSelection } from './DocumentManager'; // Ensure this is imported
-import { OpAttributes } from './Document'; // For applyFormat
+import DocumentManager, { DocSelection } from './DocumentManager'; // Updated import
+import { Document, OpAttributes } from './Document'; // Ensured Document is imported correctly
+import { ModuleOptions, RitorOptions } from './types'; // Ensure RitorOptions is also there if used
 
 class Ritor extends EventEmitter {
   private static modules = new Map();
@@ -49,18 +50,18 @@ class Ritor extends EventEmitter {
     this.emit('editor:init'); // Initial event
 
     // Listen for document changes to re-render
-    // Remove old listener if any
+    // Remove old listener if any to be safe, then add the new one
     this.off('document:change');
-    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => {
+    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => { // newSelection is optional
       if (this.renderer && newDoc) {
-        this.renderer.render(newDoc);
-        if (newSelection) {
+        this.renderer.render(newDoc); // Render the new document
+        if (newSelection && this.docManager) { // Check if docManager exists
           const domRange = this.docManager.docSelectionToDomRange(newSelection);
           if (domRange) {
             this.docManager.cursor.setRange(domRange);
           }
         }
-        this.emit('cursor:change'); // Notify that selection might have changed
+        this.emit('cursor:change');
       }
     });
 
@@ -220,6 +221,31 @@ class Ritor extends EventEmitter {
     return this.docManager;
   }
 
+  public getCurrentDomRange(): Range | null {
+    if (!this.docManager) return null;
+    return this.docManager.cursor.getRange();
+  }
+
+  public domRangeToDocSelection(range: Range): DocSelection | null {
+      if (!this.docManager) return null;
+      return this.docManager.domRangeToDocSelection(range);
+  }
+
+  public getFormatAt(selection: DocSelection): OpAttributes {
+    if (!this.docManager) return {};
+    return this.docManager.getFormatAt(selection);
+  }
+
+  // applyFormat(attributes: OpAttributes) already exists and is public.
+
+  // Method for ClearFormat module
+  public clearFormatting(selection: DocSelection): void {
+      if (!this.docManager) return;
+      // DocumentManager needs a method like clearFormat(selection)
+      // which would create a Delta with {attributes: null} for all keys in the range
+      this.docManager.clearFormat(selection);
+  }
+
   public handleCharacterInput(char: string): void {
     if (!this.docManager) return;
     const domRange = this.docManager.cursor.getRange();
@@ -292,10 +318,12 @@ class Ritor extends EventEmitter {
     }
   }
 
-  public getHtml() {
-    // Clean up empty tags except self closing tags
-    // Clean up code added by extensions like grammarly
-    return this.$el?.innerHTML;
+  public getHtml(): string {
+    if (!this.docManager) {
+      return '';
+    }
+    const currentDelta = this.docManager.getDocument().getDelta();
+    return Renderer.deltaToHtml(currentDelta);
   }
 }
 
