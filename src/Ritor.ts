@@ -1,9 +1,12 @@
-import Content from './Content';
+import DocumentManager from './DocumentManager';
 import DomEvents from './DomEvents';
 import defaultModules from './defaultModules';
 import EventEmitter from './EventEmitter';
 import { Module, RitorOptions } from './types';
+import { Renderer } from './Renderer';
 import { isObject } from './utils';
+import { DocSelection } from './DocumentManager'; // Ensure this is imported
+import { OpAttributes } from './Document'; // For applyFormat
 
 class Ritor extends EventEmitter {
   private static modules = new Map();
@@ -11,10 +14,13 @@ class Ritor extends EventEmitter {
   private options: RitorOptions = {
     modules: {},
   };
+  private shortcuts: Map<string, string> = new Map(); // Map of key combo to moduleName
   private initialized: boolean;
 
   public $el: HTMLElement;
   public moduleInstances = new Map();
+  private docManager: DocumentManager;
+  private renderer: Renderer;
 
   constructor(target: string, options?: RitorOptions) {
     super();
@@ -34,10 +40,37 @@ class Ritor extends EventEmitter {
       isObject(this.options.modules) ? this.options.modules : {},
       this.initializeDefaultModules(),
     );
+    this.docManager = new DocumentManager(this);
+    this.renderer = new Renderer(this);
     this.initializeModules();
-    this.init();
+    this.registerModuleShortcuts(); // Register shortcuts after modules are initialized
+    this.init(); // init sets up DomEvents listeners, including the one that emits 'keydown'
     this.initialized = true;
-    this.emit('editor:init');
+    this.emit('editor:init'); // Initial event
+
+    // Listen for document changes to re-render
+    // Remove old listener if any
+    this.off('document:change');
+    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => {
+      if (this.renderer && newDoc) {
+        this.renderer.render(newDoc);
+        if (newSelection) {
+          const domRange = this.docManager.docSelectionToDomRange(newSelection);
+          if (domRange) {
+            this.docManager.cursor.setRange(domRange);
+          }
+        }
+        this.emit('cursor:change'); // Notify that selection might have changed
+      }
+    });
+
+    // Listen to keydown events (emitted by DomEvents.ts)
+    this.on('keydown', this.handleGlobalKeydown.bind(this));
+
+    // Perform initial render
+    if(this.docManager && this.renderer) {
+        this.renderer.render(this.docManager.getDocument());
+    }
   }
 
   private initializeDefaultModules() {
@@ -75,15 +108,81 @@ class Ritor extends EventEmitter {
     }
   }
 
-  private initializeModules() {
+  private initializeModules() { // Ensure this method exists and is called
     const modules = this.options.modules;
     modules &&
       Object.keys(modules).forEach((moduleName) => {
-        const module = Ritor.getModule(moduleName);
-        if (module) {
-          this.moduleInstances.set(moduleName, new module.moduleClass(this, { ...modules[moduleName], moduleName }));
+        const moduleConfig = Ritor.modules.get(moduleName); // Get from static registry
+        if (moduleConfig && moduleConfig.moduleClass) {
+          // Pass the specific module options from Ritor's options
+          const moduleSpecificOptions = modules[moduleName] || {}; // User options for this instance
+
+          // Prioritize shortcut from user options, then from module's static property
+          let shortcutKey = moduleSpecificOptions.shortcutKey;
+          if (!shortcutKey && moduleConfig.moduleClass.hasOwnProperty('shortcutKey')) {
+            shortcutKey = (moduleConfig.moduleClass as any).shortcutKey;
+          } else if (!shortcutKey && moduleConfig.moduleClass.prototype.hasOwnProperty('shortcutKey')) {
+            // Check prototype if it's an instance property on the class, though static is preferred
+             shortcutKey = (moduleConfig.moduleClass.prototype as any).shortcutKey;
+          }
+
+
+          const fullModuleOptions: ModuleOptions = {
+            ...moduleSpecificOptions, // User-provided options for this module instance
+            moduleName: moduleName, // Ensure moduleName is part of options passed to BaseModule
+            shortcutKey: shortcutKey, // Explicitly set shortcutKey
+          };
+
+          this.moduleInstances.set(moduleName, new moduleConfig.moduleClass(this, fullModuleOptions));
         }
       });
+  }
+
+  private registerModuleShortcuts() {
+    this.moduleInstances.forEach((moduleInstance, moduleName) => {
+      // Assume moduleInstance.options.shortcutKey is where shortcut is defined
+      // This was set up in BaseModule's constructor options.
+      const shortcutKey = moduleInstance.options?.shortcutKey;
+      if (shortcutKey) {
+        // Normalize the key for map storage, e.g., 'ctrl+b'
+        const normalizedKey = this.normalizeShortcutKey(shortcutKey);
+        this.shortcuts.set(normalizedKey, moduleName);
+      }
+    });
+  }
+
+  private normalizeShortcutKey(shortcut: string): string {
+    const parts = shortcut.toLowerCase().split(/[:.+]/).filter(k => k !== 'prevent' && k !== 'stop');
+    parts.sort(); // Ensure consistent order, e.g., 'ctrl+b' vs 'b+ctrl'
+    return parts.join('+');
+  }
+
+  private handleGlobalKeydown(e: KeyboardEvent) {
+    const keyString = [];
+    if (e.ctrlKey || e.metaKey) keyString.push('ctrl'); // Treat Meta as Ctrl for common shortcuts
+    if (e.shiftKey) keyString.push('shift');
+    if (e.altKey) keyString.push('alt');
+    keyString.push(e.key.toLowerCase());
+
+    const normalizedPressedKey = this.normalizeShortcutKey(keyString.join('+'));
+
+    if (this.shortcuts.has(normalizedPressedKey)) {
+      const moduleName = this.shortcuts.get(normalizedPressedKey);
+      if (moduleName) {
+        const moduleInstance = this.moduleInstances.get(moduleName);
+        if (moduleInstance && typeof moduleInstance.handleClick === 'function') {
+          // Check if shortcut definition requested preventDefault
+          const originalShortcutDef = moduleInstance.options?.shortcutKey;
+          if (originalShortcutDef && originalShortcutDef.includes('.prevent')) {
+            e.preventDefault();
+          }
+          if (originalShortcutDef && originalShortcutDef.includes('.stop')) {
+            e.stopPropagation(); // Though less common for contentEditable shortcuts
+          }
+          moduleInstance.handleClick(); // Call the module's action handler
+        }
+      }
+    }
   }
 
   private registerEvents() {
@@ -114,12 +213,82 @@ class Ritor extends EventEmitter {
     }
   }
 
-  public getContent() {
-    const content = new Content(this);
-    if (this.$el && content.cursor.isWithin(this.$el)) {
-      return content;
-    } else {
-      return null;
+  public getDocumentManager(): DocumentManager {
+    // As per instructions, Ritor now holds an instance of DocumentManager created in the constructor.
+    // This method should simply return that instance.
+    // The check `this.docManager.cursor.isWithin(this.$el)` can be removed for now or handled by the caller if needed.
+    return this.docManager;
+  }
+
+  public handleCharacterInput(char: string): void {
+    if (!this.docManager) return;
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange) return;
+
+    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (currentDocSelection) {
+      this.docManager.insertText(char, currentDocSelection);
+      // docManager.insertText will emit 'document:change' which Ritor listens to
+      // for rendering and selection update.
+    }
+  }
+
+  public handleBackspace(): void {
+    if (!this.docManager) return;
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange) return;
+
+    let currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (currentDocSelection) {
+      if (currentDocSelection.length === 0 && currentDocSelection.index > 0) {
+        // Typical backspace behavior: delete character before cursor
+        currentDocSelection.index -= 1;
+        currentDocSelection.length = 1;
+      }
+      if (currentDocSelection.length > 0) {
+        this.docManager.deleteText(currentDocSelection);
+      }
+    }
+  }
+
+  public handleDelete(): void {
+    if (!this.docManager) return;
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange) return;
+
+    let currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (currentDocSelection) {
+      if (currentDocSelection.length === 0) {
+        // Typical delete behavior: delete character after cursor
+        currentDocSelection.length = 1;
+      }
+      if (currentDocSelection.length > 0) {
+        this.docManager.deleteText(currentDocSelection);
+      }
+    }
+  }
+
+  public handlePasteText(text: string): void {
+    if (!this.docManager) return;
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange) return;
+    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (currentDocSelection) {
+      // For simplicity, this is like insertText. A real paste might involve
+      // parsing HTML content and creating a more complex Delta.
+      this.docManager.insertText(text, currentDocSelection);
+    }
+  }
+
+  // Example of a method modules might call later
+  public applyFormat(attributes: OpAttributes) {
+    if (!this.docManager) return;
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange || domRange.collapsed) return; // Need a selection to format
+
+    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (currentDocSelection && currentDocSelection.length > 0) {
+      this.docManager.formatText(attributes, currentDocSelection);
     }
   }
 

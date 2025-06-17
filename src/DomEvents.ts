@@ -1,134 +1,88 @@
+// src/DomEvents.ts
 import Ritor from './Ritor';
-import { domUtil } from './utils';
 
 class DomEvents {
   private ritor: Ritor;
-  private shortcutKeys = new Map();
 
   constructor(ritor: Ritor) {
     this.ritor = ritor;
-    this.observeContentChange();
-    this.registerShortcutKeys();
   }
 
-  private observeContentChange() {
-    if (this.ritor.$el) {
-      const mo = new MutationObserver(() => this.ritor.emit('input:change'));
-      mo.observe(this.ritor.$el, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-      });
+  public handleMouseUp() {
+    // Debounce or use setTimeout to ensure selection is updated
+    setTimeout(() => {
+      this.ritor.emit('cursor:change');
+    }, 0);
+  }
+
+  public handleKeydown(e: KeyboardEvent) {
+    this.ritor.emit('keydown', e); // Emit raw keydown event for modules or Ritor to act upon
+
+    // Example: Intercepting Enter key for basic paragraph handling (conceptual)
+    // if (e.key === 'Enter') {
+    //   e.preventDefault();
+    //   this.ritor.handleEnterKey(); // Ritor would then use DocumentManager
+    // }
+
+    // Basic printable characters (simplified - does not handle all cases)
+    // `beforeinput` is generally better for this.
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+      // This is a very simplified way to capture character input.
+      // `beforeinput` event is preferred for text input.
+      // e.preventDefault(); // Important if we are handling it fully
+      // this.ritor.handleCharacterInput(e.key);
     }
-  }
 
-  private fixEmptyEditor() {
-    const content = this.ritor.getContent();
-    if (content?.isEmpty()) {
-      if (this.ritor.$el) {
-        // if only <br>, pasted text is going inside br tag
-        this.ritor.$el.innerHTML = '&nbsp;';
-        const range = new Range();
-        range.setStart(this.ritor.$el.childNodes[0], 0);
-        range.setEnd(this.ritor.$el.childNodes[0], 0);
-        content.cursor.setRange(range);
-      }
+    // Let Ritor decide how to handle backspace, delete, etc.
+    if (e.key === 'Backspace') {
+      // e.preventDefault(); // Prevent default backspace
+      // this.ritor.handleBackspace();
     }
-  }
-
-  private bindShortcutKeys(e: KeyboardEvent) {
-    let shortcutKey = e.code;
-    if (e.ctrlKey || e.metaKey) {
-      shortcutKey = `ctrl:${e.code}`;
+    if (e.key === 'Delete') {
+      // e.preventDefault(); // Prevent default delete
+      // this.ritor.handleDelete();
     }
-    if (this.shortcutKeys.get(shortcutKey)) {
-      this.shortcutKeys.get(shortcutKey)?.(e);
-    }
-  }
 
-  private fireCursorChange(e: PointerEvent | KeyboardEvent | MouseEvent | ClipboardEvent) {
-    this.ritor.emit('cursor:change');
-  }
-
-  private registerShortcutKeys() {
-    Array.from(this.ritor.moduleInstances).forEach((module) => {
-      const [moduleName, moduleInstance] = module;
-      let shortcutKey = moduleInstance.shortcutKey;
-      if (shortcutKey && moduleInstance.click) {
-        shortcutKey = shortcutKey.replace('.prevent', '');
-        this.shortcutKeys.set(shortcutKey, (e: KeyboardEvent) => {
-          if (moduleInstance.shortcutKey.indexOf('.prevent') > -1) {
-            e.preventDefault();
-          }
-          moduleInstance.click();
-        });
-      }
-    });
-
-    this.shortcutKeys.set('ctrl:KeyZ', () => console.log('Undo'));
-    this.shortcutKeys.set('ctrl:KeyY', () => console.log('Redo'));
-    this.shortcutKeys.set('ctrl:KeyS', (e: KeyboardEvent) => {
-      e.preventDefault();
-    });
-  }
-
-  public handleDoubleClick(e: MouseEvent) {
-    // Fix firefox double click selection issue
-    if (navigator.userAgent.indexOf('Firefox') != -1) {
-      const target = e.target as HTMLElement;
-      const content = this.ritor.getContent();
-      if (domUtil.isInlineElement(target.nodeName)) {
-        const range = new Range();
-        range.selectNodeContents(target);
-        content?.cursor.setRange(range);
-        this.fireCursorChange(e);
-      }
-    }
+    // Trigger cursor change on keydown as well, as it might affect selection/cursor position
+    // especially for non-printable keys like arrows.
+    setTimeout(() => {
+      this.ritor.emit('cursor:change');
+    }, 0);
   }
 
   public handleBeforeInput(e: InputEvent) {
-    if (e.inputType === 'historyUndo') e.preventDefault();
-    if (e.inputType === 'historyRedo') e.preventDefault();
+    this.ritor.emit('beforeinput', e); // Emit raw event
+
+    // Modern way to handle text input
+    if (e.inputType === 'insertText' && e.data) {
+      e.preventDefault();
+      this.ritor.handleCharacterInput(e.data);
+    } else if (e.inputType === 'deleteContentBackward') {
+      e.preventDefault();
+      this.ritor.handleBackspace();
+    } else if (e.inputType === 'deleteContentForward') {
+      e.preventDefault();
+      this.ritor.handleDelete();
+    }
+    // Add handlers for other inputTypes like insertParagraph, formatBold, etc.
+    // e.g., if (e.inputType === 'insertParagraph') { e.preventDefault(); this.ritor.handleEnterKey(); }
   }
 
   public handlePaste(e: ClipboardEvent) {
     e.preventDefault();
-    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-    const content = this.ritor.getContent();
-    content?.insertText(text);
-    this.fireCursorChange(e);
+    const text = e.clipboardData?.getData('text/plain');
+    if (text) {
+      this.ritor.handlePasteText(text);
+    }
+    this.ritor.emit('paste', e);
+  }
+
+  public handleDoubleClick(e: MouseEvent) {
+    this.ritor.emit('dblclick', e);
   }
 
   public handleOutsideDragAndDrop(e: DragEvent) {
-    e.preventDefault();
-  }
-
-  public handleMouseUp(e: MouseEvent) {
-    this.fireCursorChange(e);
-  }
-
-  public handleKeydown(e: KeyboardEvent) {
-    this.fixEmptyEditor();
-    this.bindShortcutKeys(e);
-
-    switch (e.code) {
-      case 'ArrowLeft':
-      case 'ArrowRight':
-      case 'ArrowUp':
-      case 'ArrowDown':
-      case 'Backspace':
-      case 'Delete':
-      case 'Home':
-      case 'End':
-        this.fireCursorChange(e);
-        break;
-      case 'Enter':
-        e.preventDefault();
-        this.ritor.getContent()?.insertHtml('<br>');
-        break;
-    }
-
-    this.ritor.emit(`key:${e.key}`, e);
+    this.ritor.emit('contentoutside:dragdrop', e);
   }
 }
 

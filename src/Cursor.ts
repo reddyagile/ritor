@@ -1,36 +1,53 @@
+// src/Cursor.ts
 class Cursor {
   private sel: Selection | null = null;
 
   constructor() {
-    this.sel = this.getSelection();
+    // It's fine to set it initially, but methods should refresh
+    this.sel = window.getSelection();
   }
 
-  public getSelection() {
-    return window.getSelection();
+  // Helper to refresh the internal selection object
+  private refreshSelection(): Selection | null {
+    this.sel = window.getSelection();
+    return this.sel;
   }
 
-  public getRange() {
-    return this.sel && this.sel.rangeCount > 0 ? this.sel.getRangeAt(0) : null;
+  public getSelection(): Selection | null {
+    return this.refreshSelection();
   }
 
-  public setRange(saved: Range) {
-    if (this.sel) {
-      this.sel.removeAllRanges();
-      this.sel.addRange(saved);
+  public getRange(): Range | null {
+    const currentSel = this.refreshSelection();
+    return currentSel && currentSel.rangeCount > 0 ? currentSel.getRangeAt(0) : null;
+  }
+
+  public setRange(rangeToRestore: Range): void {
+    const currentSel = this.refreshSelection();
+    if (currentSel) {
+      currentSel.removeAllRanges();
+      currentSel.addRange(rangeToRestore);
     }
   }
 
-  public isCollapsed() {
-    return this.sel && this.sel.isCollapsed;
+  public isCollapsed(): boolean {
+    const currentSel = this.refreshSelection();
+    return currentSel ? currentSel.isCollapsed : true; // Default to true if no selection
   }
 
-  public isWithin(container: HTMLElement) {
-    return this.sel && container.contains(this.sel.anchorNode) && container.contains(this.sel.focusNode);
+  public isWithin(container: HTMLElement): boolean {
+    const currentSel = this.refreshSelection();
+    if (!currentSel || !currentSel.anchorNode || !currentSel.focusNode) {
+      return false;
+    }
+    return container.contains(currentSel.anchorNode) && container.contains(currentSel.focusNode);
   }
 
-  public getContainer() {
-    const range = this.getRange()?.cloneRange();
-    let node = range?.commonAncestorContainer;
+  public getContainer(): Node | null {
+    const range = this.getRange()?.cloneRange(); // getRange() now refreshes selection
+    if (!range) return null;
+
+    let node = range.commonAncestorContainer;
     if (node && node.nodeType === Node.TEXT_NODE && node.parentNode) {
       node = node.parentNode;
     }
