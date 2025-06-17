@@ -1,10 +1,11 @@
 // src/Document.ts
 
 export interface OpAttributes {
-  bold?: boolean;
-  italic?: boolean;
-  underline?: boolean;
-  [key: string]: any; // For extensibility
+  bold?: boolean | null;       // Allow null
+  italic?: boolean | null;     // Allow null
+  underline?: boolean | null;  // Allow null
+  // Example for future: link?: string | null;
+  [key: string]: any;          // Index signature for extensibility (already present)
 }
 
 export interface Op {

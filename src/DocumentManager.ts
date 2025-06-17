@@ -198,7 +198,7 @@ class DocumentManager {
     this.ritor.emit('document:change', this.currentDocument, newSelection);
   }
 
-  public formatText(attributes: OpAttributes, selection: DocSelection) {
+  public formatText(attributes: OpAttributesType, selection: DocSelection) { // Changed here
     const currentDoc = this.getDocument();
     // selection is now guaranteed to be provided by Ritor and is non-null.
     // Ritor also ensures selection.length > 0 for formatting.

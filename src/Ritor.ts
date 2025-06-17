@@ -1,13 +1,13 @@
-import DocumentManager from './DocumentManager';
+// src/Ritor.ts
+import DocumentManager, { DocSelection } from './DocumentManager'; // Consolidated: default DocumentManager and named DocSelection
 import DomEvents from './DomEvents';
 import defaultModules from './defaultModules';
 import EventEmitter from './EventEmitter';
-import { Module, RitorOptions } from './types';
+import { Module, ModuleOptions, RitorOptions } from './types'; // Consolidated: Module, ModuleOptions, RitorOptions
 import { Renderer } from './Renderer';
 import { isObject } from './utils';
-import DocumentManager, { DocSelection } from './DocumentManager'; // Updated import
-import { Document, OpAttributes } from './Document'; // Ensured Document is imported correctly
-import { ModuleOptions, RitorOptions } from './types'; // Ensure RitorOptions is also there if used
+// Document is imported separately, ensure it's not duplicated if it was part of the problem list
+import { Document, OpAttributes } from './Document';
 
 class Ritor extends EventEmitter {
   private static modules = new Map();
