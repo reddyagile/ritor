@@ -725,5 +725,40 @@ class DocumentManager {
     }
     return new Delta(mergedFinalOps);
   }
+
+  public insertBlockBreak(selection: DocSelection): void {
+    const currentDoc = this.getDocument();
+    const ops: Op[] = [];
+    let newCursorIndex = selection.index;
+
+    // Retain content before the selection
+    if (selection.index > 0) {
+      ops.push({ retain: selection.index });
+    }
+
+    // Delete content if selection is not collapsed
+    if (selection.length > 0) {
+      ops.push({ delete: selection.length });
+    }
+
+    // Insert the newline character that signifies a block break (paragraph)
+    // For now, it's a simple newline. Later, this op could carry block attributes.
+    ops.push({ insert: '\n' });
+    newCursorIndex = selection.index + 1; // Cursor after the inserted newline
+
+    // Retain content after the original selection
+    const docLength = currentDoc.getDelta().length();
+    const originalSegmentEndIndex = selection.index + selection.length;
+    if (docLength > originalSegmentEndIndex) {
+      ops.push({ retain: docLength - originalSegmentEndIndex });
+    }
+
+    const change = new Delta(ops);
+    const composedDelta = this.compose(currentDoc.getDelta(), change);
+    this.currentDocument = new Document(composedDelta);
+
+    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
+    this.ritor.emit('document:change', this.currentDocument, newSelection);
+  }
 }
 export default DocumentManager;

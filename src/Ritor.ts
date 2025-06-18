@@ -325,6 +325,32 @@ class Ritor extends EventEmitter {
     const currentDelta = this.docManager.getDocument().getDelta();
     return Renderer.deltaToHtml(currentDelta);
   }
+
+  public handleEnterKey(): void {
+    if (!this.docManager) return;
+
+    // Get current selection from the DOM
+    const domRange = this.docManager.cursor.getRange();
+    if (!domRange) {
+        // If no range (e.g. editor not focused), perhaps insert at end or do nothing
+        // For now, let's assume a valid range is needed or docManager handles it.
+        // A more robust approach might get the last known selection or default to end of doc.
+        // Let's try to get DocSelection even if domRange is null, DocumentManager might have a default.
+    }
+
+    // Convert DOM range to DocSelection.
+    // If domRange is null, domRangeToDocSelection should ideally handle this,
+    // possibly by returning selection at end of document or null.
+    const currentDocSelection = domRange ?
+                                this.docManager.domRangeToDocSelection(domRange) :
+                                { index: this.docManager.getDocument().getDelta().length(), length: 0 }; // Fallback to end
+
+    if (currentDocSelection) {
+      this.docManager.insertBlockBreak(currentDocSelection);
+      // The docManager.insertBlockBreak will emit 'document:change',
+      // which Ritor listens to for rendering and selection update.
+    }
+  }
 }
 
 export default Ritor;

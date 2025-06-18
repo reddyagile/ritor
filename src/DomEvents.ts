@@ -9,52 +9,52 @@ class DomEvents {
   }
 
   public handleMouseUp() {
-    // Debounce or use setTimeout to ensure selection is updated
     setTimeout(() => {
       this.ritor.emit('cursor:change');
     }, 0);
   }
 
   public handleKeydown(e: KeyboardEvent) {
-    this.ritor.emit('keydown', e); // Emit raw keydown event for modules or Ritor to act upon
+    this.ritor.emit('keydown', e);
 
-    // Example: Intercepting Enter key for basic paragraph handling (conceptual)
-    // if (e.key === 'Enter') {
-    //   e.preventDefault();
-    //   this.ritor.handleEnterKey(); // Ritor would then use DocumentManager
-    // }
-
-    // Basic printable characters (simplified - does not handle all cases)
-    // `beforeinput` is generally better for this.
-    if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
-      // This is a very simplified way to capture character input.
-      // `beforeinput` event is preferred for text input.
-      // e.preventDefault(); // Important if we are handling it fully
-      // this.ritor.handleCharacterInput(e.key);
+    // Fallback for Enter key if not handled by beforeinput or if beforeinput is not supported/fired.
+    // If beforeinput handles 'insertParagraph' and calls preventDefault, this might not run
+    // or its preventDefault might not matter.
+    // For simplicity, we can have it here. If both fire and preventDefault, it's usually fine.
+    if (e.key === 'Enter' && !e.defaultPrevented) { // Check if already handled
+      // Check for Shift+Enter for potential <br> insertion (future feature, not handled now)
+      // if (e.shiftKey) {
+      //   this.ritor.handleShiftEnterKey(); // Placeholder for future
+      //   return;
+      // }
+      e.preventDefault(); // Prevent default paragraph or div insertion by contentEditable
+      this.ritor.handleEnterKey();
     }
 
-    // Let Ritor decide how to handle backspace, delete, etc.
-    if (e.key === 'Backspace') {
-      // e.preventDefault(); // Prevent default backspace
+    if (e.key === 'Backspace' && !e.defaultPrevented) {
+      // This was previously handled by handleBeforeInput's deleteContentBackward.
+      // If we want keydown to also trigger it as a fallback or primary:
+      // e.preventDefault();
       // this.ritor.handleBackspace();
     }
-    if (e.key === 'Delete') {
-      // e.preventDefault(); // Prevent default delete
+    if (e.key === 'Delete' && !e.defaultPrevented) {
+      // Similar for Delete
+      // e.preventDefault();
       // this.ritor.handleDelete();
     }
 
-    // Trigger cursor change on keydown as well, as it might affect selection/cursor position
-    // especially for non-printable keys like arrows.
     setTimeout(() => {
       this.ritor.emit('cursor:change');
     }, 0);
   }
 
   public handleBeforeInput(e: InputEvent) {
-    this.ritor.emit('beforeinput', e); // Emit raw event
+    this.ritor.emit('beforeinput', e);
 
-    // Modern way to handle text input
-    if (e.inputType === 'insertText' && e.data) {
+    if (e.inputType === 'insertParagraph') {
+      e.preventDefault();
+      this.ritor.handleEnterKey();
+    } else if (e.inputType === 'insertText' && e.data) {
       e.preventDefault();
       this.ritor.handleCharacterInput(e.data);
     } else if (e.inputType === 'deleteContentBackward') {
@@ -64,17 +64,17 @@ class DomEvents {
       e.preventDefault();
       this.ritor.handleDelete();
     }
-    // Add handlers for other inputTypes like insertParagraph, formatBold, etc.
-    // e.g., if (e.inputType === 'insertParagraph') { e.preventDefault(); this.ritor.handleEnterKey(); }
+    // Other inputTypes can be handled here as features are added (e.g., formatBold, historyUndo etc.)
   }
 
   public handlePaste(e: ClipboardEvent) {
-    e.preventDefault();
+    e.preventDefault(); // Prevent default paste behavior
     const text = e.clipboardData?.getData('text/plain');
+    // Future: Could also get 'text/html' and parse it into a Delta.
     if (text) {
-      this.ritor.handlePasteText(text);
+      this.ritor.handlePasteText(text); // Ritor will use DocumentManager to insert
     }
-    this.ritor.emit('paste', e);
+    this.ritor.emit('paste', e); // Emit paste event for other potential listeners
   }
 
   public handleDoubleClick(e: MouseEvent) {
