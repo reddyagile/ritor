@@ -33,7 +33,7 @@ export class Renderer {
 
   public render(doc: Document): void {
     this.$el.innerHTML = '';
-    this.currentBlockElement = null;
+    // this.currentBlockElement = null;
 
     const delta = doc.getDelta();
     if (!delta || !delta.ops || delta.ops.length === 0) {
@@ -61,11 +61,9 @@ export class Renderer {
     if (op.insert !== undefined) {
       let text = op.insert;
 
-      if (text.includes('
-')) { // Use single quotes with
+      if (text.includes('\n')) { // Use single quotes with
 
-        const segments = text.split('
-'); // Use single quotes with
+        const segments = text.split('\n'); // Use single quotes with
 
         segments.forEach((segment, index) => {
           if (segment) {
@@ -150,8 +148,7 @@ export class Renderer {
                    .replace(/"/g, '&quot;')
                    .replace(/'/g, '&#39;');
 
-        const segments = text.split('
-'); // Use single quotes with
+        const segments = text.split('\n'); // Use single quotes with
 
         segments.forEach((segment, i) => {
           if (!firstBlockEnsured && html === '') {
@@ -180,10 +177,7 @@ export class Renderer {
     });
 
     if (currentParagraphContent ||
-        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
-')) || // Use single quotes with
-
-        html === '') {
+        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('\n')) || html === '') {
         finalizeParagraph();
     }
     return html || "<p><br></p>";
