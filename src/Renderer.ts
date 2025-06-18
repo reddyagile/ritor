@@ -45,15 +45,29 @@ export class Renderer {
       this.renderOp(op);
     });
 
-    if (this.$el.childNodes.length === 0) {
-      this.ensureCurrentBlock().appendChild(document.createElement('br'));
-    } else if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
+    // New finalization logic
+    if (this.currentBlockElement === null) {
+      // This means the last op processed was a newline, or the document was empty.
+      // A new block was pending. Ensure it's created and becomes current.
+      this.ensureCurrentBlock();
+    }
+
+    // Now, this.currentBlockElement refers to the conceptually last block element
+    // that should be in the document (either pre-existing or just created).
+    // If this block is empty, add a <br> to make it selectable/visible.
+    if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
       this.currentBlockElement.appendChild(document.createElement('br'));
-    } else if (!this.currentBlockElement && this.$el.lastChild &&
-               this.$el.lastChild.nodeType === Node.ELEMENT_NODE &&
-               (this.$el.lastChild as HTMLElement).nodeName === 'P' &&
-               (this.$el.lastChild as HTMLElement).childNodes.length === 0) {
-      (this.$el.lastChild as HTMLElement).appendChild(document.createElement('br'));
+    } else if (this.$el.childNodes.length === 0) {
+      // Fallback: If after all ops and the above check, the editor is still completely empty
+      // (e.g., if ensureCurrentBlock somehow didn't run or currentBlockElement was detached),
+      // ensure there's at least one paragraph with a <br>.
+      // This call to ensureCurrentBlock will create a new one if currentBlockElement was valid but then removed,
+      // or if it was null and the one created by the first `if` was somehow removed.
+      // This is a safety net.
+      const finalFallbackBlock = this.ensureCurrentBlock(); // ensureCurrentBlock handles appending if needed
+      if(finalFallbackBlock.childNodes.length === 0){
+          finalFallbackBlock.appendChild(document.createElement('br'));
+      }
     }
   }
 
