@@ -204,18 +204,13 @@ class Cursor {
     return this.selection;
   }
 
-  // Renamed from getSelection to getBrowserSelection to avoid conflict if we use getSelection for DocSelection
-  public getBrowserSelection(): Selection | null {
-    return this.refreshSelection();
-  }
-
-  // Renamed from getRange to getDomRange
+  // Renamed from getRange to getDomRange - RETAINED
   public getDomRange(): Range | null {
     const currentSel = this.refreshSelection();
     return currentSel && currentSel.rangeCount > 0 ? currentSel.getRangeAt(0) : null;
   }
 
-  // Renamed from setRange to setDomRange
+  // Renamed from setRange to setDomRange - RETAINED
   public setDomRange(rangeToRestore: Range): void {
     const currentSel = this.refreshSelection();
     if (currentSel) {
@@ -224,12 +219,8 @@ class Cursor {
     }
   }
 
-  public isCollapsed(): boolean {
-    const currentSel = this.refreshSelection();
-    return currentSel ? currentSel.isCollapsed : true;
-  }
-
-  public isWithin(container: HTMLElement): boolean { // May not be needed if Ritor checks $el directly
+  // isWithin is RETAINED
+  public isWithin(container: HTMLElement): boolean {
     const currentSel = this.refreshSelection();
     if (!currentSel || !currentSel.anchorNode || !currentSel.focusNode) {
       return false;
@@ -237,16 +228,9 @@ class Cursor {
     return container.contains(currentSel.anchorNode) && container.contains(currentSel.focusNode);
   }
 
-  // getContainer() might be less relevant or could be adapted to use DocSelection logic
-  public getDomContainer(): Node | null {
-    const domRange = this.getDomRange();
-    if (!domRange) return null;
-    let node = domRange.commonAncestorContainer;
-    if (node && node.nodeType === Node.TEXT_NODE && node.parentNode) {
-      node = node.parentNode;
-    }
-    return node;
-  }
+  // getDomContainer() was removed.
+  // isCollapsed() was removed.
+  // getBrowserSelection() was removed.
 
   // --- New public API for DocSelection ---
   public getDocSelection(): DocSelection | null {
