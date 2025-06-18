@@ -90,13 +90,45 @@ class DocumentManager {
       } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
         // This branch handles if range.startContainer/endContainer IS an ELEMENT_NODE
         // Only try to set start/end if they haven't been found yet (e.g., by a child text node)
-        if (!foundStartContainer && currentNode === range.startContainer) {
-            start = charCount + getLengthTillChild(currentNode, range.startOffset);
-            foundStartContainer = true;
-        }
-        if (!foundEndContainer && currentNode === range.endContainer) {
-            end = charCount + getLengthTillChild(currentNode, range.endOffset);
-            foundEndContainer = true;
+        // Handle <br> tags by incrementing charCount
+        if (currentNode.nodeName.toUpperCase() === 'BR') {
+          // Before processing BR as a character, check if selection points to it or before it
+          if (!foundStartContainer && currentNode === range.startContainer) {
+            // If selection is ON the BR element, offset 0 is before, 1 is after.
+            // Let's treat selection on BR as being *after* it for index purposes if offset is > 0,
+            // or *at* its position if offset is 0.
+            // For charCount, BR always adds 1. The selection index is relative to this.
+            // If startOffset is 0 (selection is at the br itself, or before it as a child of parent),
+            // then start index is current charCount.
+            // If startOffset is 1 (selection is after the br as a child of parent),
+            // then start index is charCount + 1.
+            // This specific handling for range.container being BR is complex.
+            // For simplicity now: BR adds 1 to charCount. If range points to BR,
+            // use charCount (before BR) + offset (0 or 1 usually).
+            // This might need refinement. Let's first ensure BR adds to charCount.
+
+            // If the range container is this BR element itself
+             if (range.startContainer === currentNode && !foundStartContainer) {
+                 start = charCount + range.startOffset; // offset 0 is before, 1 is after the BR's "position"
+                 foundStartContainer = true;
+             }
+             if (range.endContainer === currentNode && !foundEndContainer) {
+                 end = charCount + range.endOffset;
+                 foundEndContainer = true;
+             }
+          }
+          charCount += 1; // Treat <br> as a single character like
+
+        } else {
+            // Existing logic for other element nodes if they are the range container
+            if (!foundStartContainer && currentNode === range.startContainer) {
+                start = charCount + getLengthTillChild(currentNode, range.startOffset);
+                foundStartContainer = true;
+            }
+            if (!foundEndContainer && currentNode === range.endContainer) {
+                end = charCount + getLengthTillChild(currentNode, range.endOffset);
+                foundEndContainer = true;
+            }
         }
         // Element nodes themselves don't add to charCount here; their text node children do.
         // The NodeIterator will visit text node children next. If a child text node
@@ -110,44 +142,38 @@ class DocumentManager {
       if (start !== -1) {
         end = start;
       } else {
-        // If start wasn't found, attempt to determine a valid position
-        // This could happen if the range points to an empty element or similar
-        // For now, default to 0,0 or end of doc if it's a truly odd case
-        // The existing fallback logic below will handle this.
+        // If start wasn't found, this indicates an issue.
+        // Fallback to end of content or 0,0 if completely empty.
+        // This part of logic should be hit if range points to an empty editor.
+        const totalTextLen = getRecursiveTextLength(editorEl); // Includes BRs as 1 now potentially
+        start = totalTextLen; // Default to end
+        end = totalTextLen;
+        if (range.startContainer === editorEl && range.startOffset === 0) { // Collapsed at very start of empty editor
+            start = 0; end = 0;
+        }
       }
     }
 
-    // Ensure 'end' is not less than 'start', can happen with complex selections or if only one was found.
     if (end !== -1 && start !== -1 && end < start) {
-        // This indicates an issue, perhaps range was backwards or only one endpoint truly resolved.
-        // Or if foundEndContainer became true before foundStartContainer in a weird DOM order.
-        // For simplicity, if end < start, treat as collapsed at start or swap.
-        // Let's assume for now that start is primary if end is less.
         end = start;
     }
 
-
     if (start === -1 || end === -1) {
-      // If editor is empty and range points to editor element itself
-      if (editorEl.textContent === "" && range.startContainer === editorEl && range.endContainer === editorEl) {
+      if (editorEl.textContent === "" && range.startContainer === editorEl && range.endContainer === editorEl && getRecursiveTextLength(editorEl) === 0) {
+          // Check getRecursiveTextLength if it counts BRs now. If it does, this condition might change.
+          // For simplicity, if editorEl.textContent is empty, it's likely 0,0.
           return { index: 0, length: 0 };
       }
-
-      // If start was found but end was not (e.g. selection goes beyond rendered text)
       if (start !== -1 && end === -1) {
           const totalTextLength = getRecursiveTextLength(editorEl);
-          end = totalTextLength; // Set end to the total length of text content
-          if (start > end) start = end; // Ensure start is not beyond this new end
+          end = totalTextLength;
+          if (start > end) start = end;
           return { index: start, length: Math.max(0, end - start) };
       }
-
       console.warn('Could not map DOM range to document selection accurately. Range:', range, 'Calculated:', {start,end});
-      // Fallback to current total length (effectively end of document for index, 0 for length if collapsed)
-      // This might be better than just editorEl.textContent.length if getRecursiveTextLength is accurate
       const fallbackIndex = getRecursiveTextLength(editorEl);
       return { index: (start !== -1 ? start : fallbackIndex), length: 0 };
     }
-
     return { index: start, length: Math.max(0, end - start) };
   }
 
