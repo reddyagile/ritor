@@ -62,9 +62,11 @@ export class Renderer {
       let text = op.insert;
 
       if (text.includes('
-')) { // Intended: check for actual newline character
+')) { // Use single quotes with
+
         const segments = text.split('
-'); // Intended: split by actual newline character
+'); // Use single quotes with
+
         segments.forEach((segment, index) => {
           if (segment) {
             const block = this.ensureCurrentBlock();
@@ -149,7 +151,8 @@ export class Renderer {
                    .replace(/'/g, '&#39;');
 
         const segments = text.split('
-'); // Intended: split by actual newline character
+'); // Use single quotes with
+
         segments.forEach((segment, i) => {
           if (!firstBlockEnsured && html === '') {
               firstBlockEnsured = true;
@@ -178,7 +181,8 @@ export class Renderer {
 
     if (currentParagraphContent ||
         (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
-')) || // Intended: check for actual newline
+')) || // Use single quotes with
+
         html === '') {
         finalizeParagraph();
     }
