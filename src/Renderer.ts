@@ -28,7 +28,7 @@ export class Renderer {
   }
 
   private closeCurrentBlock(): void {
-    this.currentBlockElement = null; // Signal that the block is "closed"
+    this.currentBlockElement = null;
   }
 
   public render(doc: Document): void {
@@ -53,53 +53,42 @@ export class Renderer {
                this.$el.lastChild.nodeType === Node.ELEMENT_NODE &&
                (this.$el.lastChild as HTMLElement).nodeName === 'P' &&
                (this.$el.lastChild as HTMLElement).childNodes.length === 0) {
-      // This comment refers to a newline character (e.g. from an insert: "
-" op).
-      // If currentBlock is null (meaning last op was a newline character),
-      // and the last actual child is an empty P, add a BR.
       (this.$el.lastChild as HTMLElement).appendChild(document.createElement('br'));
     }
   }
 
   private renderOp(op: Op): void {
     if (op.insert !== undefined) {
-      let text = op.insert; // This text can contain actual newline characters ('
-')
+      let text = op.insert;
 
       if (text.includes('
-')) { // Check for actual newline characters
+')) { // Use literal '
+' for actual newline character
         const segments = text.split('
-'); // Split by actual newline characters
+'); // Use literal '
+'
         segments.forEach((segment, index) => {
           if (segment) {
             const block = this.ensureCurrentBlock();
             const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
             inlineNodes.forEach(node => block.appendChild(node));
           } else if (index === 0 && segments.length > 1) {
-            // Handles cases like an initial newline character ("
-text")
-            // or just a single newline ("
-") which results in segments ["", ""].
-            // Ensures a block exists, then it will be closed by the newline.
             this.ensureCurrentBlock();
           }
 
-          if (index < segments.length - 1) { // A newline was processed
+          if (index < segments.length - 1) {
             this.closeCurrentBlock();
-            // The next call to ensureCurrentBlock will create a new paragraph.
           }
         });
       } else if (text === "" && op.attributes && Object.keys(op.attributes).length > 0) {
         const block = this.ensureCurrentBlock();
         const inlineNodes = this.createTextNodesAndApplyAttributes("", op.attributes);
         inlineNodes.forEach(node => block.appendChild(node));
-      } else if (text) { // Non-empty text, no newlines
+      } else if (text) {
         const block = this.ensureCurrentBlock();
         const inlineNodes = this.createTextNodesAndApplyAttributes(text, op.attributes);
         inlineNodes.forEach(node => block.appendChild(node));
       } else if (text === "" && !op.attributes) {
-        // For an op like { insert: "" } without attributes.
-        // Ensure a block is present if it's needed for structure.
         this.ensureCurrentBlock();
       }
     }
@@ -157,10 +146,13 @@ text")
     delta.ops.forEach((op) => {
       if (op.insert !== undefined) {
         let text = op.insert;
-        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                   .replace(/"/g, '&quot;')
+                   .replace(/'/g, '&#39;');
 
         const segments = text.split('
-'); // Split by actual newline characters
+'); // Use literal '
+'
         segments.forEach((segment, i) => {
           if (!firstBlockEnsured && html === '') {
               firstBlockEnsured = true;
@@ -179,7 +171,7 @@ text")
             }
             currentParagraphContent += segmentHtml;
           }
-          if (i < segments.length - 1) { // A true newline character was processed
+          if (i < segments.length - 1) {
             finalizeParagraph();
             firstBlockEnsured = true;
           }
@@ -189,11 +181,11 @@ text")
 
     if (currentParagraphContent ||
         (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
-')) ||
+')) || // Use literal '
+'
         html === '') {
         finalizeParagraph();
     }
-
     return html || "<p><br></p>";
   }
 }
