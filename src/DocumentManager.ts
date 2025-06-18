@@ -434,6 +434,42 @@ class DocumentManager {
     const iterA = new DeltaIterator(opsA);
     const iterB = new DeltaIterator(opsB);
 
+    function areAttributesSemanticallyEqual(attrs1?: OpAttributesType, attrs2?: OpAttributesType): boolean {
+      const normalize = (attrs?: OpAttributesType): OpAttributesType | undefined => {
+        if (!attrs) return undefined;
+        const keys = Object.keys(attrs);
+        if (keys.length === 0) return undefined;
+
+        const normalized: OpAttributesType = {};
+        let effectiveKeys = 0;
+        for (const key of keys) {
+          if (attrs[key] !== undefined && attrs[key] !== null) { // Treat null as unset too for semantic equality in merging
+            normalized[key] = attrs[key];
+            effectiveKeys++;
+          }
+        }
+        return effectiveKeys > 0 ? normalized : undefined;
+      };
+
+      const normalizedAttrs1 = normalize(attrs1);
+      const normalizedAttrs2 = normalize(attrs2);
+
+      if (normalizedAttrs1 === undefined && normalizedAttrs2 === undefined) return true;
+      if (normalizedAttrs1 === undefined || normalizedAttrs2 === undefined) return false; // One is undefined, the other is not
+
+      const keys1 = Object.keys(normalizedAttrs1);
+      const keys2 = Object.keys(normalizedAttrs2);
+
+      if (keys1.length !== keys2.length) return false;
+
+      for (const key of keys1) {
+        if (normalizedAttrs1[key] !== normalizedAttrs2[key]) {
+          return false;
+        }
+      }
+      return true;
+    }
+
     // Helper to push ops and merge if possible
     const pushOp = (newOp: Op) => {
       if (resultOps.length === 0) {
@@ -443,31 +479,15 @@ class DocumentManager {
 
       const lastOp = resultOps[resultOps.length - 1];
 
-      if (newOp.delete && lastOp.delete) { // Merge deletes
+      if (newOp.delete && lastOp.delete) {
         lastOp.delete += newOp.delete;
-      } else if (newOp.retain && lastOp.retain && OpAttributeComposer.compose(newOp.attributes, lastOp.attributes) === OpAttributeComposer.compose(lastOp.attributes, newOp.attributes) && OpAttributeComposer.compose(newOp.attributes, lastOp.attributes) === newOp.attributes ) { // Merge retains with same attributes
-         // This attribute check is to ensure they are truly identical for merging.
-         // A simpler check is if both are undefined or deep equal.
-         // For now, if attributes are the same (or both undefined), merge.
-         const newAttrs = newOp.attributes;
-         const lastAttrs = lastOp.attributes;
-         if ( (newAttrs === undefined && lastAttrs === undefined) ||
-              (newAttrs && lastAttrs && JSON.stringify(newAttrs) === JSON.stringify(lastAttrs)) ) {
-            lastOp.retain! += newOp.retain;
-         } else {
-            resultOps.push(newOp);
-         }
-
-      } else if (newOp.insert && lastOp.insert && typeof newOp.insert === 'string' && typeof lastOp.insert === 'string') {
-        const newAttrs = newOp.attributes;
-        const lastAttrs = lastOp.attributes;
-        // Merge inserts if attributes are the same
-        if ( (newAttrs === undefined && lastAttrs === undefined) ||
-             (newAttrs && lastAttrs && JSON.stringify(newAttrs) === JSON.stringify(lastAttrs)) ) {
-          lastOp.insert += newOp.insert;
-        } else {
-          resultOps.push(newOp);
-        }
+      } else if (newOp.retain && lastOp.retain &&
+                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) { // Use new comparison
+        lastOp.retain! += newOp.retain;
+      } else if (newOp.insert && lastOp.insert &&
+                 typeof newOp.insert === 'string' && typeof lastOp.insert === 'string' &&
+                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) { // Use new comparison
+        lastOp.insert += newOp.insert;
       } else {
         resultOps.push(newOp);
       }
@@ -567,27 +587,17 @@ class DocumentManager {
             const currentOp = {...finalOps[i]}; // Clone current op
             const lastMergedOp = mergedFinalOps[mergedFinalOps.length - 1];
 
-            if (currentOp.delete && lastMergedOp.delete) { // Merge deletes
+            if (currentOp.delete && lastMergedOp.delete) {
                 lastMergedOp.delete += currentOp.delete;
-            } else if (currentOp.insert && lastMergedOp.insert && typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string') {
-                const currentAttrs = currentOp.attributes;
-                const lastAttrs = lastMergedOp.attributes;
-                if ( (currentAttrs === undefined && lastAttrs === undefined) ||
-                     (currentAttrs && lastAttrs && JSON.stringify(currentAttrs) === JSON.stringify(lastAttrs)) ) {
-                    lastMergedOp.insert += currentOp.insert;
-                } else {
-                    mergedFinalOps.push(currentOp);
-                }
-            } else if (currentOp.retain && lastMergedOp.retain ) {
-                 const currentAttrs = currentOp.attributes;
-                 const lastAttrs = lastMergedOp.attributes;
-                 if ( (currentAttrs === undefined && lastAttrs === undefined) ||
-                     (currentAttrs && lastAttrs && JSON.stringify(currentAttrs) === JSON.stringify(lastAttrs)) ) {
-                    lastMergedOp.retain += currentOp.retain;
-                 } else {
-                    mergedFinalOps.push(currentOp);
-                 }
+            } else if (currentOp.insert && lastMergedOp.insert &&
+                typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string' &&
+                areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) { // Use new comparison
+                lastMergedOp.insert += currentOp.insert;
+            } else if (currentOp.retain && lastMergedOp.retain &&
+                       areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) { // Use new comparison for retains
+                lastMergedOp.retain! += currentOp.retain;
             }
+            // ... (other types of ops if necessary for merging, e.g. deletes)
             else {
                 mergedFinalOps.push(currentOp);
             }
