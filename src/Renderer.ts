@@ -2,7 +2,6 @@
 import Ritor from './Ritor';
 import { Document, Delta, Op, OpAttributes } from './Document';
 
-// These constants should be defined at the module level to be accessible by the static deltaToHtml method.
 const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
   bold: 'STRONG',
   italic: 'EM',
@@ -29,7 +28,7 @@ export class Renderer {
   }
 
   private closeCurrentBlock(): void {
-    this.currentBlockElement = null;
+    this.currentBlockElement = null; // Signal that the block is "closed"
   }
 
   public render(doc: Document): void {
@@ -47,51 +46,50 @@ export class Renderer {
     });
 
     if (this.$el.childNodes.length === 0) {
-      // If ops ran but produced nothing (e.g. delta with only empty inserts without attributes)
       this.ensureCurrentBlock().appendChild(document.createElement('br'));
     } else if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
-      // If the last active block is empty
       this.currentBlockElement.appendChild(document.createElement('br'));
     } else if (!this.currentBlockElement && this.$el.lastChild &&
-               this.$el.lastChild.nodeType === Node.ELEMENT_NODE && // Ensure lastChild is an Element
+               this.$el.lastChild.nodeType === Node.ELEMENT_NODE &&
                (this.$el.lastChild as HTMLElement).nodeName === 'P' &&
                (this.$el.lastChild as HTMLElement).childNodes.length === 0) {
-      // If last op was a newline (currentBlockElement is null), and the actual last <P> is empty
+      // This comment refers to a newline character (e.g. from an insert: "
+" op).
+      // If currentBlock is null (meaning last op was a newline character),
+      // and the last actual child is an empty P, add a BR.
       (this.$el.lastChild as HTMLElement).appendChild(document.createElement('br'));
     }
   }
 
   private renderOp(op: Op): void {
     if (op.insert !== undefined) {
-      let text = op.insert; // Should be actual newline characters '
-' from Delta
+      let text = op.insert; // This text can contain actual newline characters ('
+')
 
       if (text.includes('
-')) {
+')) { // Check for actual newline characters
         const segments = text.split('
-');
+'); // Split by actual newline characters
         segments.forEach((segment, index) => {
-          if (segment) { // If there's text in the segment
+          if (segment) {
             const block = this.ensureCurrentBlock();
             const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
             inlineNodes.forEach(node => block.appendChild(node));
           } else if (index === 0 && segments.length > 1) {
-            // Handles "
-text" or "
-" - ensures a block exists before it's closed by the newline
+            // Handles cases like an initial newline character ("
+text")
+            // or just a single newline ("
+") which results in segments ["", ""].
+            // Ensures a block exists, then it will be closed by the newline.
             this.ensureCurrentBlock();
           }
 
           if (index < segments.length - 1) { // A newline was processed
             this.closeCurrentBlock();
-            // The next call to ensureCurrentBlock (from next segment or next op) will create a new <p>
-            // If this newline is the last character of the op's text (e.g. "text
-"),
-            // and it's the last op, render() finalization will handle the new empty block.
+            // The next call to ensureCurrentBlock will create a new paragraph.
           }
         });
       } else if (text === "" && op.attributes && Object.keys(op.attributes).length > 0) {
-        // Empty insert with attributes (format placeholder)
         const block = this.ensureCurrentBlock();
         const inlineNodes = this.createTextNodesAndApplyAttributes("", op.attributes);
         inlineNodes.forEach(node => block.appendChild(node));
@@ -100,7 +98,8 @@ text" or "
         const inlineNodes = this.createTextNodesAndApplyAttributes(text, op.attributes);
         inlineNodes.forEach(node => block.appendChild(node));
       } else if (text === "" && !op.attributes) {
-        // { insert: "" } without attributes. Ensure a block exists if it's the first op or part of content flow.
+        // For an op like { insert: "" } without attributes.
+        // Ensure a block is present if it's needed for structure.
         this.ensureCurrentBlock();
       }
     }
@@ -153,7 +152,7 @@ text" or "
         return '<p><br></p>';
     }
 
-    let firstBlockNeeded = true; // Flag to track if we are about to start the first paragraph
+    let firstBlockEnsured = false;
 
     delta.ops.forEach((op) => {
       if (op.insert !== undefined) {
@@ -161,14 +160,11 @@ text" or "
         text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         const segments = text.split('
-');
+'); // Split by actual newline characters
         segments.forEach((segment, i) => {
-          if (firstBlockNeeded && html === '') {
-              // This is the very beginning of processing, content will go into the first paragraph.
-              // No need to call finalizeParagraph() before this first content.
-              firstBlockNeeded = false;
+          if (!firstBlockEnsured && html === '') {
+              firstBlockEnsured = true;
           }
-
           if (segment) {
             let segmentHtml = segment;
             if (op.attributes) {
@@ -183,20 +179,21 @@ text" or "
             }
             currentParagraphContent += segmentHtml;
           }
-
           if (i < segments.length - 1) { // A true newline character was processed
             finalizeParagraph();
-            firstBlockNeeded = false; // A paragraph has been closed, so the next one isn't the "first needed" in the same way.
+            firstBlockEnsured = true;
           }
         });
       }
     });
 
-    if (currentParagraphContent || (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
-')) || html === '') {
+    if (currentParagraphContent ||
+        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
+')) ||
+        html === '') {
         finalizeParagraph();
     }
 
-    return html || "<p><br></p>"; // Final fallback
+    return html || "<p><br></p>";
   }
 }
