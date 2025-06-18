@@ -20,7 +20,7 @@ class Ritor extends EventEmitter {
   public moduleInstances = new Map();
   private docManager: DocumentManager;
   private renderer: Renderer;
-  private cursor: Cursor; // Added cursor
+  public cursor: Cursor; // Changed to public
 
   constructor(target: string, userProvidedOptions?: RitorOptions) {
     super();

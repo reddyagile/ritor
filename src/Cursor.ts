@@ -35,7 +35,7 @@ class Cursor {
     return length;
   }
 
-  public domRangeToDocSelection(range: Range): CursorDocSelection | null {
+  public domRangeToDocSelection(range: Range): DocSelection | null {
     const editorEl = this.ritor.$el;
     if (!editorEl.contains(range.startContainer) || !editorEl.contains(range.endContainer)) {
       return null;
