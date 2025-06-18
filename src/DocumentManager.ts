@@ -278,6 +278,21 @@ class DocumentManager {
 
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
+    let inheritedAttributes: OpAttributesType | undefined = undefined;
+
+    if (selection.length === 0) { // Collapsed selection: inherit attributes
+      // getFormatAt typically looks at char before cursor for collapsed selections
+      inheritedAttributes = this.getFormatAt(selection);
+      // Ensure inheritedAttributes is a clean object if it's empty,
+      // or undefined if no attributes to inherit.
+      if (inheritedAttributes && Object.keys(inheritedAttributes).length === 0) {
+        inheritedAttributes = undefined;
+      }
+    }
+    // If selection.length > 0 (replacing text), inheritedAttributes remains undefined,
+    // so the new text will not carry explicit attributes from what it replaced,
+    // unless getFormatAt was modified to return attributes of the selection being replaced.
+    // For now, focus on collapsed selection style inheritance.
 
     if (selection.index > 0) {
       ops.push({ retain: selection.index });
