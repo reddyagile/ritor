@@ -35,11 +35,9 @@ class EventEmitter {
     if (this.eventMap.has(event)) {
       const callbacks = this.eventMap.get(event);
       if (callbacks) { // Check if callbacks set exists
-          callbacks.forEach((cb: Function) => { // cb explicitly Function
-            // setTimeout(() => cb(...data), 0); // Original
-            // Safer call if cb might not be defined, though Set should not store undefined
+          callbacks.forEach((cb: Function) => {
             if (typeof cb === 'function') {
-                setTimeout(() => cb(...data), 0);
+                cb(...data); // Synchronous call
             }
           });
       }
