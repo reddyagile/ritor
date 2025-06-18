@@ -698,8 +698,10 @@ class DocumentManager {
       }
       if (processedOp.delete && processedOp.delete <= 0) return;
       if (processedOp.retain && processedOp.retain <= 0 && !processedOp.attributes) return;
-      if (processedOp.insert === "" && !processedOp.attributes && !(resultOps.length === 1 && processedOp.insert === "
-")) return;
+      // Skip empty inserts that have no attributes
+      if (processedOp.insert === "" && !processedOp.attributes) {
+        return;
+      }
 
       finalOpsProcessing.push(processedOp);
     });
