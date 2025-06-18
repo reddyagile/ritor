@@ -1,19 +1,18 @@
 // src/Ritor.ts
-import DocumentManager, { DocSelection } from './DocumentManager'; // Consolidated: default DocumentManager and named DocSelection
 import DomEvents from './DomEvents';
 import defaultModules from './defaultModules';
 import EventEmitter from './EventEmitter';
-import { Module, ModuleOptions, RitorOptions } from './types'; // Consolidated: Module, ModuleOptions, RitorOptions
+import { Module, ModuleOptions, RitorOptions, DocSelection } from './types'; // DocSelection from types
 import { Renderer } from './Renderer';
 import { isObject } from './utils';
-// Document is imported separately, ensure it's not duplicated if it was part of the problem list
 import { Document, OpAttributes } from './Document';
+import Cursor from './Cursor'; // Import Cursor
+import DocumentManager from './DocumentManager'; // DocumentManager still needed
 
 class Ritor extends EventEmitter {
   private static modules = new Map();
   private domEventMap = new Map();
-  // `options` will hold the merged configuration.
-  private options: RitorOptions; // No longer initialized here with a default.
+  private options: RitorOptions;
   private shortcuts: Map<string, string> = new Map();
   private initialized: boolean;
 
@@ -21,8 +20,9 @@ class Ritor extends EventEmitter {
   public moduleInstances = new Map();
   private docManager: DocumentManager;
   private renderer: Renderer;
+  private cursor: Cursor; // Added cursor
 
-  constructor(target: string, userProvidedOptions?: RitorOptions) { // Renamed to userProvidedOptions for clarity
+  constructor(target: string, userProvidedOptions?: RitorOptions) {
     super();
 
     if (!target) throw new Error('Target selector is required.');
@@ -30,18 +30,14 @@ class Ritor extends EventEmitter {
     if (!targetElem) throw new Error('Target element not found.');
     this.$el = targetElem;
 
-    // Define Ritor's internal defaults, especially for the modules object.
     const defaultInternalOptions: RitorOptions = { modules: {} };
-    // Merge user-provided options into these defaults. User options take precedence.
     this.options = Object.assign({}, defaultInternalOptions, userProvidedOptions);
-    // Ensure this.options.modules itself is an object, even if userProvidedOptions was undefined or had no modules key.
     this.options.modules = this.options.modules || {};
 
-    // Call initializeDefaultModules primarily for Ritor.register.
-    // It no longer returns a conflicting module configuration.
     this.initializeDefaultModules();
 
-    this.docManager = new DocumentManager(this);
+    this.cursor = new Cursor(this); // Instantiate Cursor
+    this.docManager = new DocumentManager(this); // DocumentManager needs Ritor for emit
     this.renderer = new Renderer(this);
 
     // initializeModules will now use the correctly merged this.options.modules
@@ -53,14 +49,11 @@ class Ritor extends EventEmitter {
     this.emit('editor:init'); // Initial event
 
     // Listen for document changes to re-render
-    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => { // newSelection is optional
+    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => {
       if (this.renderer && newDoc) {
-        this.renderer.render(newDoc); // Render the new document
-        if (newSelection && this.docManager) { // Check if docManager exists
-          const domRange = this.docManager.docSelectionToDomRange(newSelection);
-          if (domRange) {
-            this.docManager.cursor.setRange(domRange);
-          }
+        this.renderer.render(newDoc);
+        if (newSelection) { // newSelection is DocSelection from DocumentManager
+          this.cursor.setDocSelection(newSelection); // Use enhanced Cursor
         }
         this.emit('cursor:change');
       }
@@ -215,25 +208,22 @@ class Ritor extends EventEmitter {
   }
 
   public getDocumentManager(): DocumentManager {
-    // As per instructions, Ritor now holds an instance of DocumentManager created in the constructor.
-    // This method should simply return that instance.
-    // The check `this.docManager.cursor.isWithin(this.$el)` can be removed for now or handled by the caller if needed.
-    return this.docManager;
+    return this.docManager; // Simplified
   }
 
   public getCurrentDomRange(): Range | null {
-    if (!this.docManager) return null;
-    return this.docManager.cursor.getRange();
+    if (!this.cursor) return null;
+    return this.cursor.getDomRange();
   }
 
   public domRangeToDocSelection(range: Range): DocSelection | null {
-      if (!this.docManager) return null;
-      return this.docManager.domRangeToDocSelection(range);
+      if (!this.cursor) return null;
+      return this.cursor.domRangeToDocSelection(range);
   }
 
-  public getFormatAt(selection: DocSelection): OpAttributes {
+  public getFormatAt(selection: DocSelection): OpAttributes { // This method remains on Ritor, calls docManager
     if (!this.docManager) return {};
-    return this.docManager.getFormatAt(selection);
+    return this.docManager.getFormatAt(selection); // No change here, was already correct
   }
 
   // applyFormat(attributes: OpAttributes) already exists and is public.
@@ -247,46 +237,32 @@ class Ritor extends EventEmitter {
   }
 
   public handleCharacterInput(char: string): void {
-    if (!this.docManager) return;
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange) return;
-
-    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (!this.docManager || !this.cursor) return;
+    const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       this.docManager.insertText(char, currentDocSelection);
-      // docManager.insertText will emit 'document:change' which Ritor listens to
-      // for rendering and selection update.
     }
   }
 
   public handleBackspace(): void {
-    if (!this.docManager) return;
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange) return;
-
-    let currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (!this.docManager || !this.cursor) return;
+    let currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       if (currentDocSelection.length === 0 && currentDocSelection.index > 0) {
-        // Typical backspace behavior: delete character before cursor
-        currentDocSelection.index -= 1;
-        currentDocSelection.length = 1;
+        currentDocSelection = { index: currentDocSelection.index - 1, length: 1 };
       }
-      if (currentDocSelection.length > 0) {
+      if (currentDocSelection.length > 0) { // Ensure there's something to delete
         this.docManager.deleteText(currentDocSelection);
       }
     }
   }
 
   public handleDelete(): void {
-    if (!this.docManager) return;
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange) return;
-
-    let currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (!this.docManager || !this.cursor) return;
+    let currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       if (currentDocSelection.length === 0) {
-        // Typical delete behavior: delete character after cursor
-        currentDocSelection.length = 1;
+         currentDocSelection = { index: currentDocSelection.index, length: 1};
       }
       if (currentDocSelection.length > 0) {
         this.docManager.deleteText(currentDocSelection);
@@ -295,24 +271,17 @@ class Ritor extends EventEmitter {
   }
 
   public handlePasteText(text: string): void {
-    if (!this.docManager) return;
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange) return;
-    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (!this.docManager || !this.cursor) return;
+    const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
-      // For simplicity, this is like insertText. A real paste might involve
-      // parsing HTML content and creating a more complex Delta.
       this.docManager.insertText(text, currentDocSelection);
     }
   }
 
-  // Example of a method modules might call later
   public applyFormat(attributes: OpAttributes) {
-    if (!this.docManager) return;
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange || domRange.collapsed) return; // Need a selection to format
-
-    const currentDocSelection = this.docManager.domRangeToDocSelection(domRange);
+    if (!this.docManager || !this.cursor) return;
+    const currentDocSelection = this.cursor.getDocSelection();
+    // Apply format only if there's a selection with length
     if (currentDocSelection && currentDocSelection.length > 0) {
       this.docManager.formatText(attributes, currentDocSelection);
     }
@@ -327,29 +296,12 @@ class Ritor extends EventEmitter {
   }
 
   public handleEnterKey(): void {
-    if (!this.docManager) return;
-
-    // Get current selection from the DOM
-    const domRange = this.docManager.cursor.getRange();
-    if (!domRange) {
-        // If no range (e.g. editor not focused), perhaps insert at end or do nothing
-        // For now, let's assume a valid range is needed or docManager handles it.
-        // A more robust approach might get the last known selection or default to end of doc.
-        // Let's try to get DocSelection even if domRange is null, DocumentManager might have a default.
+    if (!this.docManager || !this.cursor) return;
+    let currentDocSelection = this.cursor.getDocSelection();
+    if (!currentDocSelection) { // Fallback if no selection found (e.g. editor not focused)
+        currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
     }
-
-    // Convert DOM range to DocSelection.
-    // If domRange is null, domRangeToDocSelection should ideally handle this,
-    // possibly by returning selection at end of document or null.
-    const currentDocSelection = domRange ?
-                                this.docManager.domRangeToDocSelection(domRange) :
-                                { index: this.docManager.getDocument().getDelta().length(), length: 0 }; // Fallback to end
-
-    if (currentDocSelection) {
-      this.docManager.insertBlockBreak(currentDocSelection);
-      // The docManager.insertBlockBreak will emit 'document:change',
-      // which Ritor listens to for rendering and selection update.
-    }
+    this.docManager.insertBlockBreak(currentDocSelection);
   }
 }
 

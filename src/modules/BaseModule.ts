@@ -1,9 +1,8 @@
 // src/modules/BaseModule.ts
 import Ritor from '../Ritor';
-import { ModuleOptions } from '../types';
-import { domUtil } from '../utils'; // Keep for toolbar class manipulation
-// import { DocSelection } from '../DocumentManager'; // DocSelection is used via Ritor methods
-import { OpAttributes } from '../Document'; // Import OpAttributes
+import { ModuleOptions, DocSelection } from '../types'; // Import DocSelection from types
+import { domUtil } from '../utils';
+import { OpAttributes } from '../Document';
 
 class BaseModule {
   public ritor: Ritor;
@@ -36,19 +35,21 @@ class BaseModule {
 
   // Handles toolbar button click
   public handleClick() {
-    if (this.options.formatAttributeKey && this.ritor) { // Added null check for ritor
+    if (this.options.formatAttributeKey && this.ritor && this.ritor.cursor) { // Check ritor.cursor
       const attributeKey = this.options.formatAttributeKey;
 
-      const domRange = this.ritor.getCurrentDomRange();
-      if (!domRange || domRange.collapsed) return;
+      const docSelection = this.ritor.cursor.getDocSelection(); // Use ritor.cursor
 
-      const docSelection = this.ritor.domRangeToDocSelection(domRange);
-      if (!docSelection || docSelection.length === 0) return;
+      // Apply format only if there's a selection with actual length
+      if (!docSelection || docSelection.length === 0) {
+        // Future: Handle toggling "typing attributes" for collapsed selection if desired.
+        // For now, only format non-collapsed selections.
+        return;
+      }
 
-      const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection); // Explicitly type
+      // getFormatAt is on Ritor, which delegates to DocumentManager
+      const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection);
       const isCurrentlyActive = !!currentFormats[attributeKey];
-
-      // If toggling off, value is null. If toggling on, value is true.
       const formatValue = isCurrentlyActive ? null : true;
       const formatToApply: OpAttributes = { [attributeKey]: formatValue };
 
@@ -69,26 +70,25 @@ class BaseModule {
 
   // Updates the active state of the toolbar button based on current selection format
   public updateActiveState() {
-    if (!this.options.formatAttributeKey || !this.ritor) { // Added null check for ritor
+    if (!this.options.formatAttributeKey || !this.ritor || !this.ritor.cursor) { // Check ritor.cursor
       this.toggleActive(false);
       return;
     }
 
-    const domRange = this.ritor.getCurrentDomRange();
-    const docManager = this.ritor.getDocumentManager(); // Get manager for isWithin check
-
-    if (!domRange || (docManager && !docManager.cursor.isWithin(this.ritor.$el))) {
+    // Check if the cursor/selection is within the editor element
+    if (!this.ritor.cursor.isWithin(this.ritor.$el)) {
         this.toggleActive(false);
         return;
     }
 
-    const docSelection = this.ritor.domRangeToDocSelection(domRange);
-    if (!docSelection) {
+    const docSelection = this.ritor.cursor.getDocSelection(); // Use ritor.cursor
+    if (!docSelection) { // If no valid selection could be determined
       this.toggleActive(false);
       return;
     }
 
-    const formats: OpAttributes = this.ritor.getFormatAt(docSelection); // Explicitly type
+    // getFormatAt is on Ritor, which delegates to DocumentManager
+    const formats: OpAttributes = this.ritor.getFormatAt(docSelection);
     const attributeKey = this.options.formatAttributeKey;
     this.toggleActive(!!formats[attributeKey]);
   }

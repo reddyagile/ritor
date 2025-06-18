@@ -21,3 +21,8 @@ export interface RitorOptions {
 }
 
 export type Module<T> = new (ritor: Ritor, options: ModuleOptions) => T;
+
+export interface DocSelection {
+  index: number;
+  length: number;
+}
