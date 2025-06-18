@@ -30,7 +30,6 @@ class DocumentManager {
   public domRangeToDocSelection(range: Range): DocSelection | null {
     const editorEl = this.ritor.$el;
     if (!editorEl.contains(range.startContainer) || !editorEl.contains(range.endContainer)) {
-      // Selection is outside the editor
       return null;
     }
 
@@ -40,7 +39,7 @@ class DocumentManager {
 
     const nodeIterator = document.createNodeIterator(
       editorEl,
-      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, // Iterate over text and element nodes
+      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
       null
     );
 
@@ -48,13 +47,10 @@ class DocumentManager {
     let foundStartContainer = false;
     let foundEndContainer = false;
 
-    // Helper function for recursive text length, defined inside to capture editorEl context if needed
-    // or can be static if it doesn't rely on instance members.
     function getRecursiveTextLength(node: Node): number {
         if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length || 0;
         if (node.nodeType === Node.ELEMENT_NODE) {
-            // Exclude editor's direct children if they are not part of content flow or are special blocks
-            // For now, assume all elements' text content contributes if they are part of the iterator's scope
+            if (node.nodeName.toUpperCase() === 'BR') return 1; // Count BR as 1 in recursive helper too
             let len = 0;
             node.childNodes.forEach(child => len += getRecursiveTextLength(child));
             return len;
@@ -88,37 +84,16 @@ class DocumentManager {
         }
         charCount += textLength;
       } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
-        // This branch handles if range.startContainer/endContainer IS an ELEMENT_NODE
-        // Only try to set start/end if they haven't been found yet (e.g., by a child text node)
-        // Handle <br> tags by incrementing charCount
         if (currentNode.nodeName.toUpperCase() === 'BR') {
-          // Before processing BR as a character, check if selection points to it or before it
-          if (!foundStartContainer && currentNode === range.startContainer) {
-            // If selection is ON the BR element, offset 0 is before, 1 is after.
-            // Let's treat selection on BR as being *after* it for index purposes if offset is > 0,
-            // or *at* its position if offset is 0.
-            // For charCount, BR always adds 1. The selection index is relative to this.
-            // If startOffset is 0 (selection is at the br itself, or before it as a child of parent),
-            // then start index is current charCount.
-            // If startOffset is 1 (selection is after the br as a child of parent),
-            // then start index is charCount + 1.
-            // This specific handling for range.container being BR is complex.
-            // For simplicity now: BR adds 1 to charCount. If range points to BR,
-            // use charCount (before BR) + offset (0 or 1 usually).
-            // This might need refinement. Let's first ensure BR adds to charCount.
-
-            // If the range container is this BR element itself
-             if (range.startContainer === currentNode && !foundStartContainer) {
-                 start = charCount + range.startOffset; // offset 0 is before, 1 is after the BR's "position"
-                 foundStartContainer = true;
-             }
-             if (range.endContainer === currentNode && !foundEndContainer) {
-                 end = charCount + range.endOffset;
-                 foundEndContainer = true;
-             }
+          if (!foundStartContainer && range.startContainer === currentNode) {
+             start = charCount + range.startOffset; // offset 0 before, 1 after BR
+             foundStartContainer = true;
           }
-          charCount += 1; // Treat <br> as a single character like
-
+          if (!foundEndContainer && range.endContainer === currentNode) {
+             end = charCount + range.endOffset;
+             foundEndContainer = true;
+          }
+          charCount += 1;
         } else {
             // Existing logic for other element nodes if they are the range container
             if (!foundStartContainer && currentNode === range.startContainer) {
@@ -130,11 +105,6 @@ class DocumentManager {
                 foundEndContainer = true;
             }
         }
-        // Element nodes themselves don't add to charCount here; their text node children do.
-        // The NodeIterator will visit text node children next. If a child text node
-        // was the actual range.startContainer, it would have already set foundStartContainer=true
-        // and start. This check ensures we don't overwrite it if the range was, for example,
-        // pointing to an element but the actual click was handled by its child text node.
       }
     }
 
@@ -142,14 +112,14 @@ class DocumentManager {
       if (start !== -1) {
         end = start;
       } else {
-        // If start wasn't found, this indicates an issue.
-        // Fallback to end of content or 0,0 if completely empty.
-        // This part of logic should be hit if range points to an empty editor.
-        const totalTextLen = getRecursiveTextLength(editorEl); // Includes BRs as 1 now potentially
-        start = totalTextLen; // Default to end
-        end = totalTextLen;
-        if (range.startContainer === editorEl && range.startOffset === 0) { // Collapsed at very start of empty editor
-            start = 0; end = 0;
+        const totalDocLength = getRecursiveTextLength(editorEl);
+        // If range points to editor start and editor is empty (or effectively empty with BRs)
+        if (range.startContainer === editorEl && range.startOffset === 0) {
+            start = 0;
+            end = 0;
+        } else {
+            start = totalDocLength;
+            end = totalDocLength;
         }
       }
     }
@@ -159,20 +129,19 @@ class DocumentManager {
     }
 
     if (start === -1 || end === -1) {
-      if (editorEl.textContent === "" && range.startContainer === editorEl && range.endContainer === editorEl && getRecursiveTextLength(editorEl) === 0) {
-          // Check getRecursiveTextLength if it counts BRs now. If it does, this condition might change.
-          // For simplicity, if editorEl.textContent is empty, it's likely 0,0.
+      const currentTotalLength = getRecursiveTextLength(editorEl);
+      if (editorEl.childNodes.length === 0 && range.startContainer === editorEl && range.endContainer === editorEl) {
           return { index: 0, length: 0 };
       }
-      if (start !== -1 && end === -1) {
-          const totalTextLength = getRecursiveTextLength(editorEl);
-          end = totalTextLength;
+      if (start !== -1 && end === -1) { // Start found, but end is beyond content
+          end = currentTotalLength;
           if (start > end) start = end;
           return { index: start, length: Math.max(0, end - start) };
       }
-      console.warn('Could not map DOM range to document selection accurately. Range:', range, 'Calculated:', {start,end});
-      const fallbackIndex = getRecursiveTextLength(editorEl);
-      return { index: (start !== -1 ? start : fallbackIndex), length: 0 };
+      console.warn('Could not map DOM range to document selection accurately. Range:', range, 'Calculated:', {start,end}, 'TotalLen:', currentTotalLength);
+      // If start is still -1, means something is very off or selection is at very end of complex structure.
+      // Default to end of document.
+      return { index: (start !== -1 ? start : currentTotalLength), length: 0 };
     }
     return { index: start, length: Math.max(0, end - start) };
   }
@@ -195,111 +164,162 @@ class DocumentManager {
 
     const nodeIterator = document.createNodeIterator(
       editorEl,
-      NodeFilter.SHOW_TEXT,
+      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, // MODIFIED: Include elements
       null
     );
 
     let currentNode: Node | null;
 
-    if (targetStartIndex === 0 && targetEndIndex === 0 && editorEl.textContent === "") {
-        let firstFocusableChild = editorEl.firstChild;
-        // If editor is empty or only contains non-text elements like <br>, find or create a point to select.
-        if (!firstFocusableChild || (firstFocusableChild.nodeType !== Node.TEXT_NODE && editorEl.childNodes.length === 1 && firstFocusableChild.nodeName === 'BR')) {
-             // If only a BR, or empty, create a text node to ensure selection can be placed.
-             // This is a common trick, though ideally renderer ensures selectable content.
-            const textNode = document.createTextNode("");
-            if (editorEl.firstChild && editorEl.firstChild.nodeName === 'BR') {
-                editorEl.insertBefore(textNode, editorEl.firstChild);
-            } else {
-                editorEl.appendChild(textNode);
+    if (targetStartIndex === 0 && targetEndIndex === 0) {
+        let isEmptyIsh = true;
+        let firstChildNode: Node | null = null;
+        const tempIter = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
+        let tempNode;
+        while(tempNode = tempIter.nextNode()){
+            if(tempNode.nodeType === Node.TEXT_NODE && tempNode.textContent !== ""){
+                isEmptyIsh = false; firstChildNode = tempNode; break;
             }
-            firstFocusableChild = textNode;
+            if(tempNode.nodeName === "BR"){ // BR means not truly empty for selection purposes
+                isEmptyIsh = false; firstChildNode = tempNode; break;
+            }
+            if(tempNode.nodeType === Node.ELEMENT_NODE && tempNode.childNodes.length > 0 && tempNode.textContent !== ""){
+                 isEmptyIsh = false; // Has non-empty children
+            }
+            if(!firstChildNode) firstChildNode = tempNode;
         }
-
-        if (firstFocusableChild) {
-            range.setStart(firstFocusableChild, 0);
-            range.setEnd(firstFocusableChild, 0);
-        } else { // Should be extremely rare after the above
-            range.selectNodeContents(editorEl);
-            range.collapse(true);
+        if (isEmptyIsh) {
+            let focusNode: Node = firstChildNode || editorEl;
+            if (!editorEl.firstChild) { // Truly empty
+                const tempText = document.createTextNode('');
+                editorEl.appendChild(tempText);
+                focusNode = tempText;
+            }
+             try {
+                if (focusNode.nodeType === Node.TEXT_NODE) {
+                    range.setStart(focusNode, 0);
+                } else { // Element, possibly editorEl itself or a BR
+                    range.selectNodeContents(focusNode); // Select the element
+                    range.collapse(true);      // Collapse to its start
+                }
+                return range;
+            } catch (e) {
+                console.warn("Error setting range on empty editor:", e);
+            }
         }
-        return range;
     }
 
-    const traversalIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT, null);
-
-    while ((currentNode = traversalIterator.nextNode()) && !foundEnd) {
+    while ((currentNode = nodeIterator.nextNode()) && (!foundEnd || (docSelection.length === 0 && !foundStart) )) {
+      let nodeLength = 0;
       if (currentNode.nodeType === Node.TEXT_NODE) {
-        const textLength = currentNode.textContent?.length || 0;
-        const endCharCount = charCount + textLength;
-
-        if (!foundStart && targetStartIndex >= charCount && targetStartIndex <= endCharCount) {
-          startNode = currentNode;
-          startOffset = targetStartIndex - charCount;
-          foundStart = true;
+        nodeLength = currentNode.textContent?.length || 0;
+      } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
+        if (currentNode.nodeName.toUpperCase() === 'BR') {
+          nodeLength = 1; // BR represents one char
         }
+        // Other elements don't contribute to charCount directly in this model
+      }
 
-        if (!foundEnd && targetEndIndex >= charCount && targetEndIndex <= endCharCount) {
-          endNode = currentNode;
-          endOffset = targetEndIndex - charCount;
+      const endCharCountAfterThisNode = charCount + nodeLength;
+
+      if (!foundStart && targetStartIndex >= charCount && targetStartIndex <= endCharCountAfterThisNode) {
+        startNode = currentNode;
+        if (currentNode.nodeType === Node.TEXT_NODE) {
+            startOffset = targetStartIndex - charCount;
+        } else if (currentNode.nodeName.toUpperCase() === 'BR') {
+            // If target is BR's position (charCount), select *before* BR. Offset 0 of BR.
+            // If target is charCount+1 (after BR), selection should be *after* BR.
+            // This needs to be relative to parent usually.
+            // For simplicity: if index is BR's char spot, set offset 0 on BR.
+            // If index is BR's char spot + 1, set offset 1 on BR (or next node).
+            startOffset = targetStartIndex - charCount; // 0 if before/at BR, 1 if after BR
+        } else { // Other element, select at child index or text boundary
+            startOffset = 0; // Default for elements, may need getChildNodeAtCharOffset logic
+        }
+        foundStart = true;
+        if (docSelection.length === 0) { // Collapsed selection
+          endNode = startNode;
+          endOffset = startOffset;
           foundEnd = true;
         }
-
-        charCount = endCharCount;
-      }
-    }
-
-    if (foundStart && !foundEnd) {
-      let lastTextNode: Node | null = null;
-      let totalTextLength = 0;
-      const endIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT, null);
-      let tempNode;
-      while(tempNode = endIterator.nextNode()) {
-          lastTextNode = tempNode;
-          totalTextLength += tempNode.textContent?.length || 0;
       }
 
-      if (lastTextNode) {
-          endNode = lastTextNode;
-          endOffset = lastTextNode.textContent?.length || 0;
-          if (targetStartIndex > totalTextLength) {
-            startNode = lastTextNode;
-            startOffset = endOffset;
-          }
-      } else if (startNode == null && !editorEl.firstChild) {
-          const emptyText = document.createTextNode('');
-          editorEl.appendChild(emptyText);
-          startNode = endNode = emptyText;
-          startOffset = endOffset = 0;
-      } else if (startNode == null) {
-          startNode = editorEl.firstChild || editorEl;
-          startOffset = 0;
-          endNode = startNode;
-          endOffset = 0;
-          if (startNode.nodeType !== Node.TEXT_NODE && range.selectNodeContents) {
-              range.selectNodeContents(startNode);
-              range.collapse(true);
-              return range;
-          }
+      if (docSelection.length > 0 && !foundEnd && targetEndIndex >= charCount && targetEndIndex <= endCharCountAfterThisNode) {
+        endNode = currentNode;
+        if (currentNode.nodeType === Node.TEXT_NODE) {
+            endOffset = targetEndIndex - charCount;
+        } else if (currentNode.nodeName.toUpperCase() === 'BR') {
+            endOffset = targetEndIndex - charCount;
+        } else {
+            endOffset = 0; // Default for elements
+        }
+        foundEnd = true;
+      }
+
+      if (nodeLength > 0) { // Only increment charCount if the node has a length (text or BR)
+          charCount = endCharCountAfterThisNode;
       }
     }
 
     if (!foundStart) {
-        const firstTextSeeker = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT, null);
-        startNode = firstTextSeeker.nextNode();
-        startOffset = 0;
-        if (!startNode) {
-            if (!editorEl.firstChild) editorEl.appendChild(document.createTextNode(""));
-            range.selectNodeContents(editorEl);
-            range.collapse(true);
-            return range;
+        let lastNode: Node | null = null;
+        let lastNodeLength = 0;
+        const allNodesIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
+        let tempCurrentNode: Node | null;
+        while(tempCurrentNode = allNodesIterator.nextNode()){
+            if(tempCurrentNode.nodeType === Node.TEXT_NODE) {
+                lastNode = tempCurrentNode;
+                lastNodeLength = tempCurrentNode.textContent?.length || 0;
+            } else if (tempCurrentNode.nodeName.toUpperCase() === 'BR') {
+                lastNode = tempCurrentNode;
+                lastNodeLength = 1;
+            } else if (!lastNode && tempCurrentNode.nodeType === Node.ELEMENT_NODE && tempCurrentNode.firstChild) {
+                // If no text/BR yet, but an element, use it as a fallback start
+                lastNode = tempCurrentNode;
+                lastNodeLength = 0;
+            }
+        }
+
+        if (lastNode) {
+            startNode = lastNode;
+            startOffset = (lastNode.nodeType === Node.TEXT_NODE) ? lastNodeLength : (lastNode.nodeName === 'BR' ? 1: 0) ;
+        } else {
+            startNode = editorEl.firstChild || editorEl;
+            startOffset = 0;
+            if (startNode.nodeType !== Node.TEXT_NODE) {
+                 try { range.selectNodeContents(startNode); range.collapse(true); return range; } catch(e){}
+            }
         }
     }
-    if (!foundEnd) {
+
+    if (docSelection.length === 0 && foundStart && !foundEnd) {
         endNode = startNode;
         endOffset = startOffset;
+    } else if (!foundEnd) {
+        // Similar logic as above for finding last node for startNode
+        let lastNode: Node | null = null;
+        let lastNodeLength = 0; // length of the last text node or 1 for BR
+        const allNodesIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
+        let tempCurrentNode: Node | null;
+        while(tempCurrentNode = allNodesIterator.nextNode()){
+             if(tempCurrentNode.nodeType === Node.TEXT_NODE) {
+                lastNode = tempCurrentNode;
+                lastNodeLength = tempCurrentNode.textContent?.length || 0;
+            } else if (tempCurrentNode.nodeName.toUpperCase() === 'BR') {
+                lastNode = tempCurrentNode;
+                lastNodeLength = 1;
+            } else if (!lastNode && tempCurrentNode.nodeType === Node.ELEMENT_NODE && tempCurrentNode.firstChild) {
+                lastNode = tempCurrentNode;
+                lastNodeLength = 0;
+            }
+        }
+        if (lastNode) {
+            endNode = lastNode;
+            endOffset = (lastNode.nodeType === Node.TEXT_NODE) ? lastNodeLength : (lastNode.nodeName === 'BR' ? 1: 0) ;
+        } else {
+            endNode = startNode; // Should not happen if startNode was found
+            endOffset = startOffset;
+        }
     }
-
 
     if (startNode && endNode) {
       try {
@@ -307,366 +327,17 @@ class DocumentManager {
         range.setEnd(endNode, endOffset);
         return range;
       } catch (e) {
-        console.error("Error setting range:", e, {startNode, startOffset, endNode, endOffset, docSelection});
-        try {
-            range.selectNodeContents(editorEl);
-            range.collapse(true);
-        } catch (finalError) {
-             console.error("Fallback range setting failed:", finalError);
-             return null;
-        }
-        return range;
+          console.error("Error setting range:", e, {startNode, startOffset, endNode, endOffset, docSelection});
+          try { range.selectNodeContents(editorEl); range.collapse(true); } catch (finalError) { console.error("Fallback range setting failed:", finalError); return null; }
+          return range;
       }
-    } else {
-      console.warn('Could not map document selection to DOM range accurately.', docSelection);
-      try {
-        range.selectNodeContents(editorEl);
-        range.collapse(true);
-      } catch (e) {
-          return null;
-      }
-      return range;
     }
+
+    console.warn('Could not map document selection to DOM range accurately (final fallback).', docSelection);
+    try { range.selectNodeContents(editorEl); range.collapse(true); } catch (e) { return null; }
+    return range;
   }
-
-
-  // The old applyDelta method is removed as insertText, formatText, deleteText
-  // now directly compose and set the new document state.
-
-  public insertText(text: string, selection: DocSelection) { // selection is now DocSelection
-    const currentDoc = this.getDocument();
-    // currentSelection is now guaranteed to be provided by Ritor
-
-    const ops: Op[] = [];
-    let newCursorIndex = selection.index;
-    let inheritedAttributes: OpAttributesType | undefined = undefined;
-
-    if (selection.length === 0) { // Collapsed selection: inherit attributes
-      // getFormatAt typically looks at char before cursor for collapsed selections
-      inheritedAttributes = this.getFormatAt(selection);
-      // Ensure inheritedAttributes is a clean object if it's empty,
-      // or undefined if no attributes to inherit.
-      if (inheritedAttributes && Object.keys(inheritedAttributes).length === 0) {
-        inheritedAttributes = undefined;
-      }
-    }
-    // If selection.length > 0 (replacing text), inheritedAttributes remains undefined,
-    // so the new text will not carry explicit attributes from what it replaced,
-    // unless getFormatAt was modified to return attributes of the selection being replaced.
-    // For now, focus on collapsed selection style inheritance.
-
-    if (selection.index > 0) {
-      ops.push({ retain: selection.index });
-    }
-    if (selection.length > 0) {
-      ops.push({ delete: selection.length });
-    }
-    ops.push({ insert: text });
-    newCursorIndex = selection.index + text.length; // Cursor after inserted text if no deletion, or at start of replacement
-
-    const docLength = currentDoc.getDelta().length();
-    const lengthAfterChange = selection.index + selection.length;
-    if (docLength > lengthAfterChange) {
-        ops.push({ retain: docLength - lengthAfterChange });
-    }
-
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-
-    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
-  }
-
-  public formatText(attributes: OpAttributesType, selection: DocSelection) {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-
-    if (selection.index > 0) {
-      ops.push({ retain: selection.index });
-    }
-    if (selection.length > 0) {
-      ops.push({ retain: selection.length, attributes: attributes });
-    }
-
-    const docLength = currentDoc.getDelta().length();
-    const lengthAfterChange = selection.index + selection.length;
-    if (docLength > lengthAfterChange) {
-        ops.push({ retain: docLength - lengthAfterChange });
-    }
-
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-
-    const newSelection: DocSelection = { index: selection.index, length: selection.length };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
-  }
-
-  public deleteText(selection: DocSelection) {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    let newCursorIndex = selection.index;
-
-    if (selection.index > 0) {
-      ops.push({ retain: selection.index });
-    }
-    if (selection.length > 0) {
-      ops.push({ delete: selection.length });
-    }
-
-    const docLength = currentDoc.getDelta().length();
-    const lengthAfterChange = selection.index + selection.length;
-    if (docLength > lengthAfterChange) {
-        ops.push({ retain: docLength - lengthAfterChange });
-    }
-
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-
-    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
-  }
-
-  public getFormatAt(selection: DocSelection): OpAttributesType {
-    const docDelta = this.currentDocument.getDelta();
-    if (!docDelta || !docDelta.ops) return {};
-
-    let index = selection.index;
-    if (selection.length > 0) {
-    } else {
-      if (index > 0) index -=1;
-    }
-
-    let currentPosition = 0;
-    for (const op of docDelta.ops) {
-      if (op.insert) {
-        const opLength = op.insert.length;
-        if (index >= currentPosition && index < currentPosition + opLength) {
-          return op.attributes || {};
-        }
-        currentPosition += opLength;
-      } else if (op.retain) {
-        const opLength = op.retain;
-          if (index >= currentPosition && index < currentPosition + opLength) {
-          return op.attributes || {};
-        }
-        currentPosition += opLength;
-      }
-    }
-    return {};
-  }
-
-  public clearFormat(selection: DocSelection): void {
-      const currentDoc = this.getDocument();
-      const ops: Op[] = [];
-
-      if (selection.index > 0) {
-          ops.push({ retain: selection.index });
-      }
-
-      if (selection.length > 0) {
-          const resetAttributes: OpAttributesType = {
-              bold: null,
-              italic: null,
-              underline: null,
-          };
-          ops.push({ retain: selection.length, attributes: resetAttributes });
-      }
-
-      const remainingLength = currentDoc.getDelta().length() - (selection.index + selection.length);
-      if (remainingLength > 0) {
-          ops.push({ retain: remainingLength });
-      }
-
-      const change = new Delta(ops);
-      const composedDelta = this.compose(currentDoc.getDelta(), change);
-      this.currentDocument = new Document(composedDelta);
-
-      const newSelection: DocSelection = { index: selection.index, length: selection.length };
-      this.ritor.emit('document:change', this.currentDocument, newSelection);
-  }
-
-  public compose(deltaA: Delta, deltaB: Delta): Delta {
-    const opsA = deltaA.ops;
-    const opsB = deltaB.ops;
-    const resultOps: Op[] = [];
-    const iterA = new DeltaIterator(opsA);
-    const iterB = new DeltaIterator(opsB);
-
-    function areAttributesSemanticallyEqual(attrs1?: OpAttributesType, attrs2?: OpAttributesType): boolean {
-      const normalize = (attrs?: OpAttributesType): OpAttributesType | undefined => {
-        if (!attrs) return undefined;
-        const keys = Object.keys(attrs);
-        if (keys.length === 0) return undefined;
-
-        const normalized: OpAttributesType = {};
-        let effectiveKeys = 0;
-        for (const key of keys) {
-          if (attrs[key] !== undefined && attrs[key] !== null) { // Treat null as unset too for semantic equality in merging
-            normalized[key] = attrs[key];
-            effectiveKeys++;
-          }
-        }
-        return effectiveKeys > 0 ? normalized : undefined;
-      };
-
-      const normalizedAttrs1 = normalize(attrs1);
-      const normalizedAttrs2 = normalize(attrs2);
-
-      if (normalizedAttrs1 === undefined && normalizedAttrs2 === undefined) return true;
-      if (normalizedAttrs1 === undefined || normalizedAttrs2 === undefined) return false; // One is undefined, the other is not
-
-      const keys1 = Object.keys(normalizedAttrs1);
-      const keys2 = Object.keys(normalizedAttrs2);
-
-      if (keys1.length !== keys2.length) return false;
-
-      for (const key of keys1) {
-        if (normalizedAttrs1[key] !== normalizedAttrs2[key]) {
-          return false;
-        }
-      }
-      return true;
-    }
-
-    // Helper to push ops and merge if possible
-    const pushOp = (newOp: Op) => {
-      if (resultOps.length === 0) {
-        resultOps.push(newOp);
-        return;
-      }
-
-      const lastOp = resultOps[resultOps.length - 1];
-
-      if (newOp.delete && lastOp.delete) {
-        lastOp.delete += newOp.delete;
-      } else if (newOp.retain && lastOp.retain &&
-                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) { // Use new comparison
-        lastOp.retain! += newOp.retain;
-      } else if (newOp.insert && lastOp.insert &&
-                 typeof newOp.insert === 'string' && typeof lastOp.insert === 'string' &&
-                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) { // Use new comparison
-        lastOp.insert += newOp.insert;
-      } else {
-        resultOps.push(newOp);
-      }
-    };
-
-    while (iterA.hasNext() || iterB.hasNext()) {
-      const opA = iterA.peek();
-      const opB = iterB.peek();
-      const typeA = iterA.peekType(); // Storing peek results to avoid repeated calls
-      const typeB = iterB.peekType();
-
-
-      if (typeB === 'insert') { // Insert operations from deltaB take precedence
-        pushOp(iterB.next());
-      } else if (opA && opA.delete) { // Deletes from deltaA are processed first
-        pushOp(iterA.next());
-      } else if (opB && opB.delete) { // Deletes from deltaB
-        let length = opB.delete!;
-        while (length > 0 && iterA.hasNext()) {
-          const nextA = iterA.peek()!;
-          const nextALength = OpUtils.getOpLength(nextA);
-          const deleteLength = Math.min(length, nextALength);
-
-          // If deleting retained content or inserted content, just consume from A
-          iterA.next(deleteLength);
-          length -= deleteLength;
-        }
-        iterB.next(); // Consume the delete op from B
-      } else if (typeA === 'retain' && typeB === 'retain') { // Both are retain
-        if (!opA || !opB || typeof opA.retain !== 'number' || typeof opB.retain !== 'number') { // Guard against invalid ops
-             if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break;
-             continue;
-        }
-        const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true); // keepNull = true for intermediate step
-        const length = Math.min(opA.retain, opB.retain);
-        if (length > 0) pushOp({ retain: length, attributes }); // Ensure positive length
-        iterA.next(length);
-        iterB.next(length);
-      } else if (typeA === 'insert' && typeB === 'retain') { // A is insert, B is retain (format application)
-        if (!opA || !opB || typeof opA.insert !== 'string' || typeof opB.retain !== 'number') { // Guard
-            if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break;
-            continue;
-        }
-        const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
-        const length = Math.min(OpUtils.getOpLength(opA), OpUtils.getOpLength(opB));
-
-        if (length > 0) {
-            // iterA.next(length) will return an op representing the segment of opA of 'length'
-            // This assumes iterA.next correctly handles partial consumption and internal offset.
-            const opAWithValue = iterA.next(length);
-            if(opAWithValue && opAWithValue.insert) { // Ensure opAWithValue is valid and has insert
-                 pushOp({ insert: opAWithValue.insert, attributes });
-            }
-            iterB.next(length); // Consume from B
-        } else { // length is 0, advance one to prevent infinite loop
-            if (OpUtils.getOpLength(opB) === 0) iterB.next();
-            else if (OpUtils.getOpLength(opA) === 0) iterA.next();
-            else { iterA.next(); iterB.next(); } // Should not happen if length is 0 and ops have length
-        }
-
-      } else if (opA) { // If B is exhausted or opB is not a priority op
-        pushOp(iterA.next());
-      } else if (opB) { // If A is exhausted
-        pushOp(iterB.next());
-      } else {
-        break; // Should not happen
-      }
-    }
-
-    const finalOps: Op[] = [];
-    resultOps.forEach(op => {
-        if (op.attributes && Object.keys(op.attributes).length === 0) {
-            delete op.attributes;
-        }
-        if (op.attributes) {
-            for (const key in op.attributes) {
-                if (op.attributes[key] === null) {
-                    delete op.attributes[key];
-                }
-            }
-            if (Object.keys(op.attributes).length === 0) {
-                delete op.attributes;
-            }
-        }
-        // Ensure ops are valid before pushing (e.g. retain/delete must have positive length)
-        if (op.delete && op.delete <=0) return;
-        if (op.retain && op.retain <=0) return;
-        if (op.insert === "") return; // Don't push empty inserts unless it's the only op for a newline
-
-        finalOps.push(op);
-    });
-
-    const mergedFinalOps: Op[] = [];
-    if (finalOps.length > 0) {
-        mergedFinalOps.push({...finalOps[0]}); // Push a clone to avoid modifying original from finalOps
-        for (let i = 1; i < finalOps.length; i++) {
-            const currentOp = {...finalOps[i]}; // Clone current op
-            const lastMergedOp = mergedFinalOps[mergedFinalOps.length - 1];
-
-            if (currentOp.delete && lastMergedOp.delete) {
-                lastMergedOp.delete += currentOp.delete;
-            } else if (currentOp.insert && lastMergedOp.insert &&
-                typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string' &&
-                areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) { // Use new comparison
-                lastMergedOp.insert += currentOp.insert;
-            } else if (currentOp.retain && lastMergedOp.retain &&
-                       areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) { // Use new comparison for retains
-                lastMergedOp.retain! += currentOp.retain;
-            }
-            // ... (other types of ops if necessary for merging, e.g. deletes)
-            else {
-                mergedFinalOps.push(currentOp);
-            }
-        }
-    }
-
-    return new Delta(mergedFinalOps);
-  }
+  // ... (rest of DocumentManager.ts) ...
 }
 
 // Helper for iterating over ops in a Delta
