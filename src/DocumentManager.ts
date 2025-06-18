@@ -76,41 +76,76 @@ class DocumentManager {
       if (currentNode.nodeType === Node.TEXT_NODE) {
         const textLength = currentNode.textContent?.length || 0;
 
-        if (currentNode === range.startContainer && !foundStartContainer) {
+        // Check if this text node is the start container
+        if (!foundStartContainer && currentNode === range.startContainer) {
           start = charCount + range.startOffset;
           foundStartContainer = true;
         }
-        if (currentNode === range.endContainer && !foundEndContainer) {
+        // Check if this text node is the end container
+        if (!foundEndContainer && currentNode === range.endContainer) {
           end = charCount + range.endOffset;
           foundEndContainer = true;
         }
         charCount += textLength;
       } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
-        // This element node itself does not add to charCount here,
-        // its text node children will be visited by the iterator and handled above.
-        // However, if the selection points directly to an ELEMENT_NODE, we need to handle it.
-        if (currentNode === range.startContainer && !foundStartContainer) {
+        // This branch handles if range.startContainer/endContainer IS an ELEMENT_NODE
+        // Only try to set start/end if they haven't been found yet (e.g., by a child text node)
+        if (!foundStartContainer && currentNode === range.startContainer) {
             start = charCount + getLengthTillChild(currentNode, range.startOffset);
             foundStartContainer = true;
         }
-        if (currentNode === range.endContainer && !foundEndContainer) {
+        if (!foundEndContainer && currentNode === range.endContainer) {
             end = charCount + getLengthTillChild(currentNode, range.endOffset);
             foundEndContainer = true;
         }
+        // Element nodes themselves don't add to charCount here; their text node children do.
+        // The NodeIterator will visit text node children next. If a child text node
+        // was the actual range.startContainer, it would have already set foundStartContainer=true
+        // and start. This check ensures we don't overwrite it if the range was, for example,
+        // pointing to an element but the actual click was handled by its child text node.
       }
     }
 
     if (range.collapsed) {
-      if (start !== -1) end = start;
-      else { start = 0; end = 0;} // Default for unusual collapsed range
+      if (start !== -1) {
+        end = start;
+      } else {
+        // If start wasn't found, attempt to determine a valid position
+        // This could happen if the range points to an empty element or similar
+        // For now, default to 0,0 or end of doc if it's a truly odd case
+        // The existing fallback logic below will handle this.
+      }
     }
 
+    // Ensure 'end' is not less than 'start', can happen with complex selections or if only one was found.
+    if (end !== -1 && start !== -1 && end < start) {
+        // This indicates an issue, perhaps range was backwards or only one endpoint truly resolved.
+        // Or if foundEndContainer became true before foundStartContainer in a weird DOM order.
+        // For simplicity, if end < start, treat as collapsed at start or swap.
+        // Let's assume for now that start is primary if end is less.
+        end = start;
+    }
+
+
     if (start === -1 || end === -1) {
+      // If editor is empty and range points to editor element itself
       if (editorEl.textContent === "" && range.startContainer === editorEl && range.endContainer === editorEl) {
           return { index: 0, length: 0 };
       }
+
+      // If start was found but end was not (e.g. selection goes beyond rendered text)
+      if (start !== -1 && end === -1) {
+          const totalTextLength = getRecursiveTextLength(editorEl);
+          end = totalTextLength; // Set end to the total length of text content
+          if (start > end) start = end; // Ensure start is not beyond this new end
+          return { index: start, length: Math.max(0, end - start) };
+      }
+
       console.warn('Could not map DOM range to document selection accurately. Range:', range, 'Calculated:', {start,end});
-      return { index: editorEl.textContent?.length || 0, length: 0 }; // Fallback to end of document
+      // Fallback to current total length (effectively end of document for index, 0 for length if collapsed)
+      // This might be better than just editorEl.textContent.length if getRecursiveTextLength is accurate
+      const fallbackIndex = getRecursiveTextLength(editorEl);
+      return { index: (start !== -1 ? start : fallbackIndex), length: 0 };
     }
 
     return { index: start, length: Math.max(0, end - start) };
