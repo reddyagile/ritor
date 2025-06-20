@@ -64,11 +64,11 @@ class BaseModule {
 
   // Toggles the 'active' class on the toolbar button
   public toggleActive(isActive: boolean) {
-    if (this.$toolbar) {
+    if (this.$toolbar) { // Correctly guard $toolbar before use
       if (isActive) {
         domUtil.addClass(this.$toolbar, 'active');
       } else {
-        domUtil.removeClass(this.options.toolbar ? this.$toolbar : null, 'active'); // Guard against null $toolbar
+        domUtil.removeClass(this.$toolbar, 'active');
       }
     }
   }
