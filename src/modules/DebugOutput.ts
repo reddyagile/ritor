@@ -1,7 +1,7 @@
 // src/modules/DebugOutput.ts
 import Ritor from '../Ritor';
-import { ModuleOptions, DocSelection } from '../types'; // Import DocSelection
-import { Document, Delta, OpAttributes } from '../Document'; // Import Document, Delta, OpAttributes
+import { ModuleOptions, DocSelection } from '../types';
+import { Document, Delta, OpAttributes } from '../Document';
 
 // Helper to serialize DOM nodes for display
 function serializeNode(node: Node | null): string {
@@ -18,6 +18,7 @@ function serializeNode(node: Node | null): string {
 
 interface DebugData {
   timestamp: string;
+  eventSource: string;
   delta?: Delta;
   docSelection?: DocSelection | null;
   domRange?: {
@@ -28,15 +29,15 @@ interface DebugData {
     endOffset: number;
   } | null;
   domRangeToDocOutput?: DocSelection | null;
-  attributesAtSelection?: OpAttributes | null;
-  eventSource: string;
+  attributesAtSelection?: OpAttributes | null; // From getFormatAt
+  typingAttributes?: OpAttributes | null;    // ADDED: From getTypingAttributes
 }
 
 class DebugOutput {
   private ritor: Ritor;
   private options: ModuleOptions;
   private $outputEl: HTMLElement | null = null;
-  private lastRenderedData: string = ""; // To prevent excessive re-renders if data is same
+  private lastRenderedData: string = "";
 
   constructor(ritor: Ritor, options: ModuleOptions) {
     this.ritor = ritor;
@@ -49,45 +50,43 @@ class DebugOutput {
     }
 
     if (this.$outputEl) {
-      this.$outputEl.textContent = 'Debug output initializing...';
       this._attachListeners();
-      // Perform an initial data collection and render
       this._collectAndRenderData('init');
     }
   }
 
   private _attachListeners(): void {
-    // Using arrow functions to maintain 'this' context
     this.ritor.on('document:change', (doc: Document, newSelection?: DocSelection) => {
       this._collectAndRenderData('document:change', newSelection);
     });
 
     this.ritor.on('cursor:change', () => {
-      // cursor:change implies DOM selection changed, Ritor itself doesn't pass the selection
-      // We derive it from the cursor module.
       this._collectAndRenderData('cursor:change');
     });
 
-    // Could add listeners for other Ritor events if needed
+    // ADDED: Listen to typingattributes:change to get the most up-to-date typing attributes
+    this.ritor.on('typingattributes:change', () => {
+        this._collectAndRenderData('typingattributes:change');
+    });
   }
 
   private _collectAndRenderData(eventSource: string, modelSelectionFromEvent?: DocSelection | null): void {
-    const docManager = this.ritor.getDocumentManager(); // Use public accessor
-    if (!this.$outputEl || !docManager || !this.ritor.cursor) return; // Guard against missing core components
+    if (!this.$outputEl || !this.ritor.docManager || !this.ritor.cursor) return;
 
-    const currentDelta = docManager ? docManager.getDocument().getDelta() : new Delta(); // Provide a default empty Delta
+    const currentDelta = this.ritor.docManager.getDocument().getDelta();
     const currentDomRange = this.ritor.cursor.getDomRange();
 
     let currentDocSelection: DocSelection | null = null;
-    let attributesAtSelection: OpAttributes | null = null;
+    let attributesAtSelection: OpAttributes | null = null; // From getFormatAt
     let domRangeToDocOutput: DocSelection | null = null;
 
-    if (modelSelectionFromEvent !== undefined) { // From document:change
+    // Determine current DocSelection
+    if (modelSelectionFromEvent !== undefined && (eventSource === 'document:change' || eventSource === 'init')) {
         currentDocSelection = modelSelectionFromEvent;
-    } else if (currentDomRange) { // From cursor:change or init
+    } else if (currentDomRange) {
         currentDocSelection = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
-    } else { // Fallback if no DOM range (e.g. editor not focused)
-        currentDocSelection = this.ritor.cursor.getDocSelection(); // Try to get it anyway
+    } else {
+        currentDocSelection = this.ritor.cursor.getDocSelection();
     }
 
     if (currentDocSelection) {
@@ -97,6 +96,9 @@ class DebugOutput {
     if (currentDomRange) {
         domRangeToDocOutput = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
     }
+
+    // Get current typing attributes
+    const currentTypingAttributes = this.ritor.getTypingAttributes(); // ADDED
 
     const debugData: DebugData = {
       timestamp: new Date().toISOString(),
@@ -112,6 +114,7 @@ class DebugOutput {
       } : null,
       domRangeToDocOutput: domRangeToDocOutput,
       attributesAtSelection: attributesAtSelection,
+      typingAttributes: currentTypingAttributes, // ADDED
     };
 
     this._renderDebugInfo(debugData);
@@ -120,45 +123,26 @@ class DebugOutput {
   private _renderDebugInfo(data: DebugData): void {
     if (!this.$outputEl) return;
 
-    // Basic formatting for readability
-    let outputText = `Timestamp: ${data.timestamp}
-`;
-    outputText += `Event Source: ${data.eventSource}
+    let outputText = `Timestamp: ${data.timestamp}\n`; // Use \n for literal
+ in output string
+    outputText += `Event Source: ${data.eventSource}\n\n`;
 
-`;
+    outputText += `Document Delta:\n${JSON.stringify(data.delta, null, 2)}\n\n`;
+    outputText += `Model DocSelection:\n${JSON.stringify(data.docSelection, null, 2)}\n\n`;
+    outputText += `Current Typing Attributes:\n${JSON.stringify(data.typingAttributes, null, 2)}\n\n`; // ADDED
+    outputText += `DOM Range:\n${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}\n\n`;
+    outputText += `Output of domRangeToDocSelection(currentDomRange):\n${JSON.stringify(data.domRangeToDocOutput, null, 2)}\n\n`;
+    outputText += `Attributes at Selection (getFormatAt):\n${JSON.stringify(data.attributesAtSelection, null, 2)}\n\n`;
 
-    outputText += `Document Delta:
-${JSON.stringify(data.delta, null, 2)}
-
-`;
-
-    outputText += `Model DocSelection:
-${JSON.stringify(data.docSelection, null, 2)}
-
-`;
-
-    outputText += `DOM Range:
-${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}
-
-`;
-
-    outputText += `Output of domRangeToDocSelection(currentDomRange):
-${JSON.stringify(data.domRangeToDocOutput, null, 2)}
-
-`;
-
-    outputText += `Attributes at Selection:
-${JSON.stringify(data.attributesAtSelection, null, 2)}
-
-`;
-
-    // Only re-render if data has changed to avoid flickering or performance issues on rapid events
     if (this.lastRenderedData !== outputText) {
-        if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') { // Check for TEXTAREA too
-            (this.$outputEl as HTMLPreElement | HTMLTextAreaElement).textContent = outputText;
+        // For <pre> or <textarea>, setting textContent with \n will render as newlines.
+        // For other HTML elements, replace \n with <br> if direct HTML injection is used.
+        if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
+            this.$outputEl.textContent = outputText;
         } else {
-            // For other elements, replace children or set innerHTML with <pre> for formatting
-            this.$outputEl.innerHTML = `<pre>${outputText.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+            // Replace \n with <br> for general HTML elements, and escape HTML special chars from the data.
+            const safeOutput = outputText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+            this.$outputEl.innerHTML = `<pre>${safeOutput}</pre>`; // Wrap in pre for consistent formatting
         }
         this.lastRenderedData = outputText;
     }

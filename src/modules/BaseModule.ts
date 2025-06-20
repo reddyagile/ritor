@@ -44,8 +44,12 @@ class BaseModule {
       if (docSelection && docSelection.length === 0) { // Collapsed selection
         // Toggle the typing attribute for this module's format
         this.ritor.toggleTypingAttribute(attributeKey);
-        // The 'typingattributes:change' event (emitted by DocumentManager via Ritor)
-        // will be handled by updateActiveState to update the button's appearance.
+
+        // ADDED: Immediately update this button's visual state
+        // based on the new state of typingAttributes.
+        const currentTypingAttrs = this.ritor.getTypingAttributes();
+        this.toggleActive(!!currentTypingAttrs[attributeKey]);
+
       } else if (docSelection && docSelection.length > 0) { // Range selection
         // Existing logic: Determine if format should be applied or removed based on current selection state
         const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection);
