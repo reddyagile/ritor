@@ -72,9 +72,10 @@ class DebugOutput {
   }
 
   private _collectAndRenderData(eventSource: string, modelSelectionFromEvent?: DocSelection | null): void {
-    if (!this.$outputEl || !this.ritor.docManager || !this.ritor.cursor) return; // Guard against missing core components
+    const docManager = this.ritor.getDocumentManager(); // Use public accessor
+    if (!this.$outputEl || !docManager || !this.ritor.cursor) return; // Guard against missing core components
 
-    const currentDelta = this.ritor.docManager.getDocument().getDelta();
+    const currentDelta = docManager ? docManager.getDocument().getDelta() : new Delta(); // Provide a default empty Delta
     const currentDomRange = this.ritor.cursor.getDomRange();
 
     let currentDocSelection: DocSelection | null = null;
