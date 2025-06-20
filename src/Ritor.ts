@@ -15,13 +15,13 @@ class Ritor extends EventEmitter {
   private options: RitorOptions;
   private shortcuts: Map<string, string> = new Map();
   private initialized: boolean;
-  private _isTogglingTypingAttribute = false; // New flag
+  private _isTogglingTypingAttribute = false;
 
   public $el: HTMLElement;
   public moduleInstances = new Map();
   private docManager: DocumentManager;
   private renderer: Renderer;
-  public cursor: Cursor; // Changed to public
+  public cursor: Cursor;
 
   constructor(target: string, userProvidedOptions?: RitorOptions) {
     super();
@@ -37,45 +37,38 @@ class Ritor extends EventEmitter {
 
     this.initializeDefaultModules();
 
-    this.cursor = new Cursor(this); // Instantiate Cursor
-    this.docManager = new DocumentManager(this); // DocumentManager needs Ritor for emit
+    this.cursor = new Cursor(this);
+    this.docManager = new DocumentManager(this);
     this.renderer = new Renderer(this.$el);
 
-    // initializeModules will now use the correctly merged this.options.modules
     this.initializeModules();
 
     this.registerModuleShortcuts();
     this.init();
     this.initialized = true;
-    this.emit('editor:init'); // Initial event
+    this.emit('editor:init');
 
-    // Listen for document changes to re-render
     this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => {
       if (this.renderer && newDoc) {
         this.renderer.render(newDoc);
-        if (newSelection) { // newSelection is DocSelection from DocumentManager
-          this.cursor.setDocSelection(newSelection); // Use enhanced Cursor
+        if (newSelection) {
+          this.cursor.setDocSelection(newSelection);
         }
         this.emit('cursor:change');
       }
     });
 
-    // Listen to keydown events (emitted by DomEvents.ts)
     this.on('keydown', this.handleGlobalKeydown.bind(this));
-
-    // Add a dedicated listener for 'cursor:change' to update typing attributes
     this.on('cursor:change', this.handleCursorChangeForTypingAttributes.bind(this));
 
-    // Perform initial render
     if(this.docManager && this.renderer) {
         this.renderer.render(this.docManager.getDocument());
     }
   }
 
   private initializeDefaultModules() {
-    // This method should ONLY register modules. It should NOT return a config.
     for (const [key, module] of Object.entries(defaultModules)) {
-      if (!Ritor.modules.has(key)) { // Optional: prevent re-registering if called multiple times
+      if (!Ritor.modules.has(key)) {
          Ritor.register(key, module);
       }
     }
@@ -108,27 +101,24 @@ class Ritor extends EventEmitter {
   }
 
   private initializeModules() {
-    const modulesConfig = this.options.modules; // This should now be the user's config from index.ts
+    const modulesConfig = this.options.modules;
     modulesConfig &&
       Object.keys(modulesConfig).forEach((moduleName) => {
         const moduleStaticConfig = Ritor.modules.get(moduleName);
         if (moduleStaticConfig && moduleStaticConfig.moduleClass) {
-          const userModuleOptions = modulesConfig[moduleName] || {}; // This IS the config from index.ts for this module
+          const userModuleOptions = modulesConfig[moduleName] || {};
 
           let shortcutKey = userModuleOptions.shortcutKey;
-          // ... (shortcut key fallback logic remains same) ...
           if (!shortcutKey && moduleStaticConfig.moduleClass.hasOwnProperty('shortcutKey')) {
             shortcutKey = (moduleStaticConfig.moduleClass as any).shortcutKey;
           } else if (!shortcutKey && moduleStaticConfig.moduleClass.prototype.hasOwnProperty('shortcutKey')) {
              shortcutKey = (moduleStaticConfig.moduleClass.prototype as any).shortcutKey;
           }
 
-          // userModuleOptions already contains moduleName if provided from index.ts,
-          // and also toolbar, etc.
           const fullModuleOptions: ModuleOptions = {
-            ...userModuleOptions, // This contains toolbar, moduleName (from index.ts)
-            moduleName: moduleName, // Ensures moduleName is the key from the loop (consistent)
-            shortcutKey: shortcutKey, // Resolved shortcutKey
+            ...userModuleOptions,
+            moduleName: moduleName,
+            shortcutKey: shortcutKey,
           };
 
           this.moduleInstances.set(moduleName, new moduleStaticConfig.moduleClass(this, fullModuleOptions));
@@ -138,11 +128,8 @@ class Ritor extends EventEmitter {
 
   private registerModuleShortcuts() {
     this.moduleInstances.forEach((moduleInstance, moduleName) => {
-      // Assume moduleInstance.options.shortcutKey is where shortcut is defined
-      // This was set up in BaseModule's constructor options.
       const shortcutKey = moduleInstance.options?.shortcutKey;
       if (shortcutKey) {
-        // Normalize the key for map storage, e.g., 'ctrl+b'
         const normalizedKey = this.normalizeShortcutKey(shortcutKey);
         this.shortcuts.set(normalizedKey, moduleName);
       }
@@ -151,13 +138,13 @@ class Ritor extends EventEmitter {
 
   private normalizeShortcutKey(shortcut: string): string {
     const parts = shortcut.toLowerCase().split(/[:.+]/).filter(k => k !== 'prevent' && k !== 'stop');
-    parts.sort(); // Ensure consistent order, e.g., 'ctrl+b' vs 'b+ctrl'
+    parts.sort();
     return parts.join('+');
   }
 
   private handleGlobalKeydown(e: KeyboardEvent) {
     const keyString = [];
-    if (e.ctrlKey || e.metaKey) keyString.push('ctrl'); // Treat Meta as Ctrl for common shortcuts
+    if (e.ctrlKey || e.metaKey) keyString.push('ctrl');
     if (e.shiftKey) keyString.push('shift');
     if (e.altKey) keyString.push('alt');
     keyString.push(e.key.toLowerCase());
@@ -169,15 +156,14 @@ class Ritor extends EventEmitter {
       if (moduleName) {
         const moduleInstance = this.moduleInstances.get(moduleName);
         if (moduleInstance && typeof moduleInstance.handleClick === 'function') {
-          // Check if shortcut definition requested preventDefault
           const originalShortcutDef = moduleInstance.options?.shortcutKey;
           if (originalShortcutDef && originalShortcutDef.includes('.prevent')) {
             e.preventDefault();
           }
           if (originalShortcutDef && originalShortcutDef.includes('.stop')) {
-            e.stopPropagation(); // Though less common for contentEditable shortcuts
+            e.stopPropagation();
           }
-          moduleInstance.handleClick(); // Call the module's action handler
+          moduleInstance.handleClick();
         }
       }
     }
@@ -212,7 +198,7 @@ class Ritor extends EventEmitter {
   }
 
   public getDocumentManager(): DocumentManager {
-    return this.docManager; // Simplified
+    return this.docManager;
   }
 
   public getCurrentDomRange(): Range | null {
@@ -225,18 +211,13 @@ class Ritor extends EventEmitter {
       return this.cursor.domRangeToDocSelection(range);
   }
 
-  public getFormatAt(selection: DocSelection): OpAttributes { // This method remains on Ritor, calls docManager
+  public getFormatAt(selection: DocSelection): OpAttributes {
     if (!this.docManager) return {};
-    return this.docManager.getFormatAt(selection); // No change here, was already correct
+    return this.docManager.getFormatAt(selection);
   }
 
-  // applyFormat(attributes: OpAttributes) already exists and is public.
-
-  // Method for ClearFormat module
   public clearFormatting(selection: DocSelection): void {
       if (!this.docManager) return;
-      // DocumentManager needs a method like clearFormat(selection)
-      // which would create a Delta with {attributes: null} for all keys in the range
       this.docManager.clearFormat(selection);
   }
 
@@ -245,6 +226,7 @@ class Ritor extends EventEmitter {
     const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       this.docManager.insertText(char, currentDocSelection);
+      this._isTogglingTypingAttribute = false;
     }
   }
 
@@ -255,8 +237,9 @@ class Ritor extends EventEmitter {
       if (currentDocSelection.length === 0 && currentDocSelection.index > 0) {
         currentDocSelection = { index: currentDocSelection.index - 1, length: 1 };
       }
-      if (currentDocSelection.length > 0) { // Ensure there's something to delete
+      if (currentDocSelection.length > 0) {
         this.docManager.deleteText(currentDocSelection);
+        this._isTogglingTypingAttribute = false;
       }
     }
   }
@@ -270,6 +253,7 @@ class Ritor extends EventEmitter {
       }
       if (currentDocSelection.length > 0) {
         this.docManager.deleteText(currentDocSelection);
+        this._isTogglingTypingAttribute = false;
       }
     }
   }
@@ -279,15 +263,18 @@ class Ritor extends EventEmitter {
     const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       this.docManager.insertText(text, currentDocSelection);
+      this._isTogglingTypingAttribute = false;
     }
   }
 
   public applyFormat(attributes: OpAttributes) {
     if (!this.docManager || !this.cursor) return;
     const currentDocSelection = this.cursor.getDocSelection();
-    // Apply format only if there's a selection with length
     if (currentDocSelection && currentDocSelection.length > 0) {
       this.docManager.formatText(attributes, currentDocSelection);
+      // Note: applyFormat applies to a range, it doesn't set typing attributes directly.
+      // The cursor:change event after this will update typing attributes from content.
+      // So, no need to set _isTogglingTypingAttribute = false here.
     }
   }
 
@@ -302,13 +289,12 @@ class Ritor extends EventEmitter {
   public handleEnterKey(): void {
     if (!this.docManager || !this.cursor) return;
     let currentDocSelection = this.cursor.getDocSelection();
-    if (!currentDocSelection) { // Fallback if no selection found (e.g. editor not focused)
+    if (!currentDocSelection) {
         currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
     }
     this.docManager.insertBlockBreak(currentDocSelection);
+    this._isTogglingTypingAttribute = false;
   }
-
-  // --- New Public Methods for Typing Attributes ---
 
   public getTypingAttributes(): OpAttributes {
     if (!this.docManager) return {};
@@ -322,55 +308,24 @@ class Ritor extends EventEmitter {
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
     if (!this.docManager) return;
-
-    this._isTogglingTypingAttribute = true; // Set flag before action
+    this._isTogglingTypingAttribute = true;
     this.docManager.toggleTypingAttribute(formatKey, explicitValue);
-    // DocumentManager will emit 'typingattributes:change', which BaseModule listens to.
-
-    // Reset the flag after a short delay, allowing any immediate, related
-    // cursor:change events to be ignored by handleCursorChangeForTypingAttributes.
-    setTimeout(() => {
-      this._isTogglingTypingAttribute = false;
-    }, 0); // A timeout of 0ms is often enough to push execution to next event loop tick.
   }
 
   private handleCursorChangeForTypingAttributes(): void {
-    // If a toggle action just happened and set this flag, skip this handler run.
     if (this._isTogglingTypingAttribute) {
-      // The flag will be reset by the setTimeout in toggleTypingAttribute.
-      // For an immediate subsequent cursor:change not related to the toggle,
-      // this might skip one update. If that's an issue, a more robust debounce
-      // or a way to count/clear this flag within the same event tick might be needed.
-      // For now, this simple flag should prevent the immediate overwrite.
       return;
     }
-
     if (!this.cursor || !this.docManager) {
       return;
     }
-
     const selection = this.cursor.getDocSelection();
-
-    if (selection && selection.length === 0) { // Selection is collapsed
-      // Get formats at the current cursor position
+    if (selection && selection.length === 0) {
       const formatsAtCursor = this.docManager.getFormatAt(selection);
-      // Set these as the current typing attributes
       this.docManager.setTypingAttributes(formatsAtCursor || {});
-      // setTypingAttributes in DocumentManager will emit 'typingattributes:change'
-      // which BaseModule's updateActiveState will listen to.
-    } else if (selection && selection.length > 0) { // A range is selected
-      // When a range is selected, clear typing attributes, as the primary focus
-      // is the selected range's format, not what will be typed next if selection collapses.
-      // Toolbar buttons will reflect the selected range's state via BaseModule's existing logic.
-      this.docManager.setTypingAttributes({});
-    } else { // No valid selection, or editor not focused. Clear typing attributes.
+    } else {
       this.docManager.setTypingAttributes({});
     }
-    // Note: BaseModule.updateActiveState also listens to 'cursor:change'.
-    // When selection is a range, it will use getFormatAt(selection).
-    // When selection is collapsed, it will now use getTypingAttributes().
-    // The call to setTypingAttributes here will emit 'typingattributes:change',
-    // ensuring BaseModule updates based on the fresh typing attributes.
   }
 }
 
