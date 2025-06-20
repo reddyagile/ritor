@@ -15,6 +15,7 @@ class Ritor extends EventEmitter {
   private options: RitorOptions;
   private shortcuts: Map<string, string> = new Map();
   private initialized: boolean;
+  private _isTogglingTypingAttribute = false; // New flag
 
   public $el: HTMLElement;
   public moduleInstances = new Map();
@@ -321,11 +322,29 @@ class Ritor extends EventEmitter {
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
     if (!this.docManager) return;
+
+    this._isTogglingTypingAttribute = true; // Set flag before action
     this.docManager.toggleTypingAttribute(formatKey, explicitValue);
+    // DocumentManager will emit 'typingattributes:change', which BaseModule listens to.
+
+    // Reset the flag after a short delay, allowing any immediate, related
+    // cursor:change events to be ignored by handleCursorChangeForTypingAttributes.
+    setTimeout(() => {
+      this._isTogglingTypingAttribute = false;
+    }, 0); // A timeout of 0ms is often enough to push execution to next event loop tick.
   }
 
-  // New method to handle cursor changes for typing attributes
   private handleCursorChangeForTypingAttributes(): void {
+    // If a toggle action just happened and set this flag, skip this handler run.
+    if (this._isTogglingTypingAttribute) {
+      // The flag will be reset by the setTimeout in toggleTypingAttribute.
+      // For an immediate subsequent cursor:change not related to the toggle,
+      // this might skip one update. If that's an issue, a more robust debounce
+      // or a way to count/clear this flag within the same event tick might be needed.
+      // For now, this simple flag should prevent the immediate overwrite.
+      return;
+    }
+
     if (!this.cursor || !this.docManager) {
       return;
     }
