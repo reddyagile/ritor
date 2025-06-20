@@ -71,17 +71,26 @@ class DebugOutput {
   }
 
   private _collectAndRenderData(eventSource: string, modelSelectionFromEvent?: DocSelection | null): void {
-    if (!this.$outputEl || !this.ritor.docManager || !this.ritor.cursor) return;
+    // Get DocumentManager instance via public accessor on Ritor
+    const docManager = this.ritor.getDocumentManager();
 
-    const currentDelta = this.ritor.docManager.getDocument().getDelta();
+    // Guard clause if essential parts are missing
+    if (!this.$outputEl || !docManager || !this.ritor.cursor) {
+      // Optionally log an error or set a default error state for the debug output
+      if (this.$outputEl) {
+          this.$outputEl.textContent = 'Error: Ritor components (docManager or cursor) not available for debug output.';
+      }
+      return;
+    }
+
+    const currentDelta = docManager.getDocument().getDelta(); // No need for ternary if guard above ensures docManager exists
     const currentDomRange = this.ritor.cursor.getDomRange();
 
     let currentDocSelection: DocSelection | null = null;
-    let attributesAtSelection: OpAttributes | null = null; // From getFormatAt
+    let attributesAtSelection: OpAttributes | null = null;
     let domRangeToDocOutput: DocSelection | null = null;
 
-    // Determine current DocSelection
-    if (modelSelectionFromEvent !== undefined && (eventSource === 'document:change' || eventSource === 'init')) {
+    if (modelSelectionFromEvent !== undefined && (eventSource === 'document:change' || eventSource === 'init' || eventSource === 'typingattributes:change')) {
         currentDocSelection = modelSelectionFromEvent;
     } else if (currentDomRange) {
         currentDocSelection = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
@@ -123,26 +132,57 @@ class DebugOutput {
   private _renderDebugInfo(data: DebugData): void {
     if (!this.$outputEl) return;
 
-    let outputText = `Timestamp: ${data.timestamp}\n`; // Use \n for literal
- in output string
-    outputText += `Event Source: ${data.eventSource}\n\n`;
+    // Build the outputText string. Actual newline characters ('
+') are used for formatting.
+    let outputText = `Timestamp: ${data.timestamp}
+`; // Literal newline
+    outputText += `Event Source: ${data.eventSource}
 
-    outputText += `Document Delta:\n${JSON.stringify(data.delta, null, 2)}\n\n`;
-    outputText += `Model DocSelection:\n${JSON.stringify(data.docSelection, null, 2)}\n\n`;
-    outputText += `Current Typing Attributes:\n${JSON.stringify(data.typingAttributes, null, 2)}\n\n`; // ADDED
-    outputText += `DOM Range:\n${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}\n\n`;
-    outputText += `Output of domRangeToDocSelection(currentDomRange):\n${JSON.stringify(data.domRangeToDocOutput, null, 2)}\n\n`;
-    outputText += `Attributes at Selection (getFormatAt):\n${JSON.stringify(data.attributesAtSelection, null, 2)}\n\n`;
+`; // Literal newline
+
+    outputText += `Document Delta:
+${JSON.stringify(data.delta, null, 2)}
+
+`; // Literal newline
+
+    outputText += `Model DocSelection:
+${JSON.stringify(data.docSelection, null, 2)}
+
+`; // Literal newline
+
+    outputText += `Current Typing Attributes:
+${JSON.stringify(data.typingAttributes, null, 2)}
+
+`; // Literal newline
+
+    outputText += `DOM Range:
+${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}
+
+`; // Literal newline
+
+    outputText += `Output of domRangeToDocSelection(currentDomRange):
+${JSON.stringify(data.domRangeToDocOutput, null, 2)}
+
+`; // Literal newline
+
+    outputText += `Attributes at Selection (getFormatAt):
+${JSON.stringify(data.attributesAtSelection, null, 2)}
+
+`; // Literal newline
 
     if (this.lastRenderedData !== outputText) {
-        // For <pre> or <textarea>, setting textContent with \n will render as newlines.
-        // For other HTML elements, replace \n with <br> if direct HTML injection is used.
         if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
+            // For PRE/TEXTAREA, textContent handles newlines correctly.
             this.$outputEl.textContent = outputText;
         } else {
-            // Replace \n with <br> for general HTML elements, and escape HTML special chars from the data.
-            const safeOutput = outputText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-            this.$outputEl.innerHTML = `<pre>${safeOutput}</pre>`; // Wrap in pre for consistent formatting
+            // For other elements, wrap in <pre>.
+            // First, escape HTML special characters from the entire outputText.
+            const htmlEscapedOutputText = outputText
+                .replace(/&/g, '&amp;') // Must be first
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            // Then, replace actual newline characters (\n) in this escaped string with <br> tags for HTML rendering.
+            this.$outputEl.innerHTML = `<pre>${htmlEscapedOutputText.replace(/\n/g, '<br>')}</pre>`;
         }
         this.lastRenderedData = outputText;
     }
