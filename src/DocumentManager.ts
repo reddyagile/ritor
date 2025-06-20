@@ -334,19 +334,19 @@ class DocumentManager {
                  areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
 
         const newIsPureBlockBreak = (newOp.insert === '\n' && (!newOp.attributes || Object.keys(newOp.attributes).length === 0));
-        const lastOpEndsWithNewline = (typeof lastOp.insert === 'string' && lastOp.insert.endsWith('\n'));
+        const lastOpEndsWithNewline = lastOp.insert.endsWith('\n');
 
         if (newIsPureBlockBreak) {
-          // If newOp is a pure newline (e.g. from Enter), always push it as a new op.
+          // A pure newline break always creates a new operation.
           resultOps.push(newOp);
         } else if (lastOpEndsWithNewline && newOp.insert !== "") {
-          // If lastOp ended with a newline, and newOp is text content,
-          // newOp should start a new operation (new paragraph's content).
+          // If lastOp ended with a newline (was a block break or contained one),
+          // and newOp is text, newOp should start a new operation.
           resultOps.push(newOp);
-        } else {
-          // Both are text content (neither is a pure block break immediately following text,
-          // or lastOp didn't end with a newline). Attributes match. Merge them.
-          // This also handles merging multiple pure newlines if that case were to pass the above.
+        }
+        else {
+          // Both are text content (neither is a pure block break, lastOp doesn't end in if newOp is text),
+          // and attributes match. Merge them.
           lastOp.insert += newOp.insert;
         }
       } else {
@@ -475,15 +475,15 @@ class DocumentManager {
                    typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string' &&
                    areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
 
-           const currentIsPureNewline = (currentOp.insert === '\n' && (!currentOp.attributes || Object.keys(currentOp.attributes).length === 0));
-           const lastMergedIsPureNewline = (lastMergedOp.insert === '\n' && (!lastMergedOp.attributes || Object.keys(lastMergedOp.attributes).length === 0));
+           const currentIsPureBlockBreak = (currentOp.insert === '\n' && (!currentOp.attributes || Object.keys(currentOp.attributes).length === 0));
+           const lastMergedOpEndsWithNewline = lastMergedOp.insert.endsWith('\n');
 
-           if (currentIsPureNewline && !lastMergedIsPureNewline) {
+           if (currentIsPureBlockBreak) {
                mergedFinalOps.push(currentOp);
-           } else if (!currentIsPureNewline && lastMergedIsPureNewline) {
+           } else if (lastMergedOpEndsWithNewline && currentOp.insert !== "") {
                mergedFinalOps.push(currentOp);
-           } else {
-               // Both are text with same attributes, or both are pure newlines with same attributes.
+           }
+           else {
                lastMergedOp.insert += currentOp.insert;
            }
         } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
