@@ -37,7 +37,10 @@ export class Renderer {
   }
 
   private createTextNodesAndApplyAttributes(text: string, attributes?: OpAttributes): Node[] {
-    if (text === "" && attributes && Object.keys(attributes).length > 0) {
+    // Replace standard spaces with non-breaking spaces for DOM rendering
+    const textWithNbsp = text.replace(/ /g, '\u00a0'); // Or String.fromCharCode(160)
+
+    if (textWithNbsp === "" && attributes && Object.keys(attributes).length > 0) {
         let styledNodeInner: Node = document.createTextNode("");
         let topStyledNode: HTMLElement | Node = styledNodeInner;
          for (const attrKey in attributes) {
@@ -52,9 +55,11 @@ export class Renderer {
           }
         return [topStyledNode];
     }
-    if (text === "") return [document.createTextNode("")];
+    // Use textWithNbsp for creating the text node if it's not just for an empty styled placeholder
+    if (textWithNbsp === "") return [document.createTextNode("")];
 
-    let topNode: Node = document.createTextNode(text);
+
+    let topNode: Node = document.createTextNode(textWithNbsp); // Use modified text
     if (attributes) {
       for (const attrKey in attributes) {
         if (attributes.hasOwnProperty(attrKey) && attributes[attrKey] === true) {
@@ -141,20 +146,65 @@ export class Renderer {
   }
 
   public static deltaToHtml(delta: Delta): string {
-    const tempDiv = document.createElement('div');
-    const tempRenderer = new Renderer(tempDiv); // CHANGED: Pass tempDiv directly
+    let html = '';
+    let currentParagraphContent = '';
 
-    tempRenderer.currentBlockElement = null; // Ensure fresh state for this temporary renderer
-    // Note: _doRender assumes its $el (tempDiv here) is already cleared by the caller's setup.
-    // tempRenderer.$el.innerHTML = ''; // This is done by _doRender if it's the instance method, or by public render.
-    // The public render() method clears this.$el.
-    // Our _doRender does not. So, deltaToHtml needs to clear its tempDiv before calling _doRender on tempRenderer.
-    // However, the _doRender method in the prompt for *this step* does not do the clearing.
-    // The public render() does. So, to mirror that:
-    tempDiv.innerHTML = ''; // Clear the tempDiv, as public render() would do for this.$el
+    const finalizeParagraph = () => {
+      html += `<p>${currentParagraphContent || '<br>'}</p>`;
+      currentParagraphContent = '';
+    };
 
-    tempRenderer._doRender(delta);
+    if (!delta || !delta.ops || delta.ops.length === 0) {
+        return '<p><br></p>';
+    }
 
-    return tempDiv.innerHTML;
+    let firstBlockEnsured = false;
+
+    delta.ops.forEach((op) => {
+      if (op.insert !== undefined) {
+        let text = op.insert;
+        // Basic text escaping for HTML content should be done first
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                   .replace(/"/g, '&quot;')
+                   .replace(/'/g, '&#39;');
+
+        const segments = text.split('\n');
+        segments.forEach((segment, i) => {
+          if (!firstBlockEnsured && html === '') {
+              firstBlockEnsured = true;
+          }
+          if (segment) {
+            let segmentHtml = segment;
+            // Apply inline styles
+            if (op.attributes) {
+              for (const attrKey in op.attributes) {
+                if (op.attributes.hasOwnProperty(attrKey) && op.attributes[attrKey] === true) {
+                  const tagName = ATTRIBUTE_TO_TAG_MAP[attrKey];
+                  if (tagName && BOOLEAN_ATTRIBUTES.includes(attrKey)) {
+                    segmentHtml = `<${tagName}>${segmentHtml}</${tagName}>`;
+                  }
+                }
+              }
+            }
+            // Replace spaces with &nbsp; in the final segmentHtml
+            segmentHtml = segmentHtml.replace(/ /g, '&nbsp;');
+            currentParagraphContent += segmentHtml;
+          }
+
+          if (i < segments.length - 1) {
+            finalizeParagraph();
+            firstBlockEnsured = true;
+          }
+        });
+      }
+    });
+
+    if (currentParagraphContent ||
+        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('\n')) ||
+        html === '') {
+        finalizeParagraph();
+    }
+
+    return html || "<p><br></p>";
   }
 }
