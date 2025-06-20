@@ -10,13 +10,13 @@ const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
 const BOOLEAN_ATTRIBUTES: string[] = ['bold', 'italic', 'underline'];
 
 export class Renderer {
-  private ritor: Ritor;
-  private $el: HTMLElement;
+  private ritor: Ritor; // Ritor context, primarily for $el
+  private $el: HTMLElement; // The root element this renderer instance operates on
   private currentBlockElement: HTMLElement | null = null;
 
   constructor(ritor: Ritor) {
     this.ritor = ritor;
-    this.$el = ritor.$el;
+    this.$el = ritor.$el; // This renderer instance is tied to this specific $el
   }
 
   private ensureCurrentBlock(defaultTag: string = 'P'): HTMLElement {
@@ -28,84 +28,12 @@ export class Renderer {
   }
 
   private closeCurrentBlock(): void {
-    this.currentBlockElement = null;
-  }
-
-  public render(doc: Document): void {
-    this.$el.innerHTML = '';
-    this.currentBlockElement = null;
-
-    const delta = doc.getDelta();
-    if (!delta || !delta.ops || delta.ops.length === 0) {
-      this.ensureCurrentBlock().appendChild(document.createElement('br'));
-      return;
-    }
-
-    delta.ops.forEach(op => {
-      this.renderOp(op);
-    });
-
-    // New finalization logic
-    if (this.currentBlockElement === null) {
-      // This means the last op processed was a newline, or the document was empty.
-      // A new block was pending. Ensure it's created and becomes current.
-      this.ensureCurrentBlock();
-    }
-
-    // Now, this.currentBlockElement refers to the conceptually last block element
-    // that should be in the document (either pre-existing or just created).
-    // If this block is empty, add a <br> to make it selectable/visible.
+    // If a block is being closed and it's empty, ensure it has a <br> for visibility/selection.
+    // This is especially important if it's not the very last action of a full render.
     if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
       this.currentBlockElement.appendChild(document.createElement('br'));
-    } else if (this.$el.childNodes.length === 0) {
-      // Fallback: If after all ops and the above check, the editor is still completely empty
-      // (e.g., if ensureCurrentBlock somehow didn't run or currentBlockElement was detached),
-      // ensure there's at least one paragraph with a <br>.
-      // This call to ensureCurrentBlock will create a new one if currentBlockElement was valid but then removed,
-      // or if it was null and the one created by the first `if` was somehow removed.
-      // This is a safety net.
-      const finalFallbackBlock = this.ensureCurrentBlock(); // ensureCurrentBlock handles appending if needed
-      if(finalFallbackBlock.childNodes.length === 0){
-          finalFallbackBlock.appendChild(document.createElement('br'));
-      }
     }
-  }
-
-  private renderOp(op: Op): void {
-    if (op.insert !== undefined) {
-      let text = op.insert;
-
-      if (text.includes('
-')) { // Use single quotes with
-
-        const segments = text.split('
-'); // Use single quotes with
-
-        segments.forEach((segment, index) => {
-          if (segment) {
-            const block = this.ensureCurrentBlock();
-            const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
-            inlineNodes.forEach(node => block.appendChild(node));
-          } else if (index === 0 && segments.length > 1) {
-            this.ensureCurrentBlock();
-          }
-
-          if (index < segments.length - 1) {
-            this.closeCurrentBlock();
-          }
-        });
-      } else if (text === "" && op.attributes && Object.keys(op.attributes).length > 0) {
-        const block = this.ensureCurrentBlock();
-        const inlineNodes = this.createTextNodesAndApplyAttributes("", op.attributes);
-        inlineNodes.forEach(node => block.appendChild(node));
-      } else if (text) {
-        const block = this.ensureCurrentBlock();
-        const inlineNodes = this.createTextNodesAndApplyAttributes(text, op.attributes);
-        inlineNodes.forEach(node => block.appendChild(node));
-      } else if (text === "" && !op.attributes) {
-        this.ensureCurrentBlock();
-      }
-    }
+    this.currentBlockElement = null;
   }
 
   private createTextNodesAndApplyAttributes(text: string, attributes?: OpAttributes): Node[] {
@@ -142,64 +70,91 @@ export class Renderer {
     return [topNode];
   }
 
-  public static deltaToHtml(delta: Delta): string {
-    let html = '';
-    let currentParagraphContent = '';
-
-    const finalizeParagraph = () => {
-      html += `<p>${currentParagraphContent || '<br>'}</p>`;
-      currentParagraphContent = '';
-    };
-
-    if (!delta || !delta.ops || delta.ops.length === 0) {
-        return '<p><br></p>';
-    }
-
-    let firstBlockEnsured = false;
-
-    delta.ops.forEach((op) => {
-      if (op.insert !== undefined) {
-        let text = op.insert;
-        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                   .replace(/"/g, '&quot;')
-                   .replace(/'/g, '&#39;');
-
-        const segments = text.split('
-'); // Use single quotes with
-
-        segments.forEach((segment, i) => {
-          if (!firstBlockEnsured && html === '') {
-              firstBlockEnsured = true;
+  private renderOp(op: Op): void {
+    if (op.insert !== undefined) {
+      let text = op.insert;
+      if (text.includes('\n')) {
+        const segments = text.split('\n');
+        segments.forEach((segment, index) => {
+          // Ensure a block for any segment, even if empty, if it's before a newline
+          // or if it's the first segment of an op that starts with text.
+          const block = this.ensureCurrentBlock();
+          if (segment) { // Only append if segment has text
+            const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
+            inlineNodes.forEach(node => block.appendChild(node));
           }
-          if (segment) {
-            let segmentHtml = segment;
-            if (op.attributes) {
-              for (const attrKey in op.attributes) {
-                if (op.attributes.hasOwnProperty(attrKey) && op.attributes[attrKey] === true) {
-                  const tagName = ATTRIBUTE_TO_TAG_MAP[attrKey];
-                  if (tagName && BOOLEAN_ATTRIBUTES.includes(attrKey)) {
-                    segmentHtml = `<${tagName}>${segmentHtml}</${tagName}>`;
-                  }
-                }
-              }
-            }
-            currentParagraphContent += segmentHtml;
-          }
-          if (i < segments.length - 1) {
-            finalizeParagraph();
-            firstBlockEnsured = true;
+          // If there's a newline character following this segment
+          if (index < segments.length - 1) {
+            this.closeCurrentBlock();
           }
         });
+      } else { // No newlines in this insert op
+        const block = this.ensureCurrentBlock(); // Ensure a block exists
+        if (text === "" && op.attributes && Object.keys(op.attributes).length > 0) {
+          const inlineNodes = this.createTextNodesAndApplyAttributes("", op.attributes);
+          inlineNodes.forEach(node => block.appendChild(node));
+        } else if (text) {
+          const inlineNodes = this.createTextNodesAndApplyAttributes(text, op.attributes);
+          inlineNodes.forEach(node => block.appendChild(node));
+        }
+        // If text is "" and no attributes, ensureCurrentBlock already made sure a block exists.
+        // It might remain empty until the next op or finalization.
       }
+    }
+  }
+
+  // This is the core rendering logic loop, now an instance method.
+  private _doRender(delta: Delta): void {
+    // this.$el is the root for this rendering pass (e.g., editor's $el or a temp div)
+    // this.currentBlockElement is the state for this rendering pass
+
+    if (!delta || !delta.ops || delta.ops.length === 0) {
+      this.ensureCurrentBlock(); // Ensure at least one block
+      this.closeCurrentBlock();  // Finalize it (adds <br> if empty)
+      return;
+    }
+
+    delta.ops.forEach(op => {
+      this.renderOp(op);
     });
 
-    if (currentParagraphContent ||
-        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('
-')) || // Use single quotes with
-
-        html === '') {
-        finalizeParagraph();
+    // Finalization logic for the very end of the document
+    if (this.currentBlockElement === null && this.$el.childNodes.length > 0) {
+      // This means the document ended with a newline character (
+).
+      // A new block was conceptually started by closeCurrentBlock(). We need to ensure it exists in DOM.
+      this.ensureCurrentBlock(); // This will create the new empty <p>
     }
-    return html || "<p><br></p>";
+
+    // After all ops, if the current (last) block is empty, or if the editor is completely empty, add a <br>.
+    if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
+      this.currentBlockElement.appendChild(document.createElement('br'));
+    } else if (this.$el.childNodes.length === 0) {
+      // This case should ideally be covered by the empty delta check or if currentBlockElement was handled.
+      // But as a final safety, ensure at least one block with a br.
+      this.ensureCurrentBlock().appendChild(document.createElement('br'));
+    }
+  }
+
+  // Public render method for the main editor element
+  public render(doc: Document): void {
+    this.$el.innerHTML = '';        // Clear main editor element
+    this.currentBlockElement = null; // Reset instance state for this render pass
+    this._doRender(doc.getDelta());
+  }
+
+  // Static method to get HTML string from a delta
+  public static deltaToHtml(delta: Delta): string {
+    const tempDiv = document.createElement('div');
+    // Create a temporary Ritor-like context. Only $el is strictly needed by Renderer's current _doRender path.
+    // The Ritor instance itself isn't used by _doRender, only its $el.
+    const dummyRitorContext = { $el: tempDiv } as Ritor;
+    const tempRenderer = new Renderer(dummyRitorContext);
+
+    // Call the instance rendering logic on the temporary renderer, targeting tempDiv
+    tempRenderer._doRender(delta); // This will use tempRenderer.$el (which is tempDiv)
+                                  // and tempRenderer.currentBlockElement
+
+    return tempDiv.innerHTML;
   }
 }
