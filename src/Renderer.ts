@@ -1,5 +1,5 @@
 // src/Renderer.ts
-import Ritor from './Ritor';
+// import Ritor from './Ritor'; // This import might become unused
 import { Document, Delta, Op, OpAttributes } from './Document';
 
 const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
@@ -10,13 +10,13 @@ const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
 const BOOLEAN_ATTRIBUTES: string[] = ['bold', 'italic', 'underline'];
 
 export class Renderer {
-  private ritor: Ritor; // Ritor context, primarily for $el
-  private $el: HTMLElement; // The root element this renderer instance operates on
+  // private ritor: Ritor; // REMOVE this if not used elsewhere
+  private $el: HTMLElement;
   private currentBlockElement: HTMLElement | null = null;
 
-  constructor(ritor: Ritor) {
-    this.ritor = ritor;
-    this.$el = ritor.$el; // This renderer instance is tied to this specific $el
+  constructor(el: HTMLElement) { // CHANGED parameter
+    // this.ritor = ritor; // REMOVE
+    this.$el = el;         // CHANGED to use the passed element
   }
 
   private ensureCurrentBlock(defaultTag: string = 'P'): HTMLElement {
@@ -70,7 +70,7 @@ export class Renderer {
     return [topNode];
   }
 
-  private renderOp(op: Op): void {
+  private renderOp(op: Op): void { // This uses instance methods ensureCurrentBlock, closeCurrentBlock
     if (op.insert !== undefined) {
       let text = op.insert;
       if (text.includes('\n')) {
@@ -103,57 +103,57 @@ export class Renderer {
     }
   }
 
-  // This is the core rendering logic loop, now an instance method.
   private _doRender(delta: Delta): void {
-    // this.$el is the root for this rendering pass (e.g., editor's $el or a temp div)
-    // this.currentBlockElement is the state for this rendering pass
+    // Assumes this.$el is already an empty container for this render pass,
+    // and this.currentBlockElement has been reset to null by the caller.
 
     if (!delta || !delta.ops || delta.ops.length === 0) {
-      this.ensureCurrentBlock(); // Ensure at least one block
-      this.closeCurrentBlock();  // Finalize it (adds <br> if empty)
+      this.ensureCurrentBlock();
+      this.closeCurrentBlock();
       return;
     }
 
     delta.ops.forEach(op => {
-      this.renderOp(op);
+      this.renderOp(op); // renderOp uses this.ensureCurrentBlock and this.closeCurrentBlock
     });
 
-    // Finalization logic for the very end of the document
+    // Finalization logic
     if (this.currentBlockElement === null && this.$el.childNodes.length > 0) {
-      // This means the document ended with a newline character (
-).
+      // This means the document ended with a newline character.
       // A new block was conceptually started by closeCurrentBlock(). We need to ensure it exists in DOM.
-      this.ensureCurrentBlock(); // This will create the new empty <p>
+      this.ensureCurrentBlock();
     }
 
-    // After all ops, if the current (last) block is empty, or if the editor is completely empty, add a <br>.
     if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
       this.currentBlockElement.appendChild(document.createElement('br'));
     } else if (this.$el.childNodes.length === 0) {
-      // This case should ideally be covered by the empty delta check or if currentBlockElement was handled.
-      // But as a final safety, ensure at least one block with a br.
+      // This case covers if all ops resulted in no children (e.g. delta of only deletes on empty content)
+      // or if the delta was empty and the initial check was bypassed.
+      // As a final safety, ensure at least one block with a br.
       this.ensureCurrentBlock().appendChild(document.createElement('br'));
     }
   }
 
-  // Public render method for the main editor element
   public render(doc: Document): void {
     this.$el.innerHTML = '';        // Clear main editor element
     this.currentBlockElement = null; // Reset instance state for this render pass
-    this._doRender(doc.getDelta());
+    this._doRender(doc.getDelta());  // Call the core logic
   }
 
-  // Static method to get HTML string from a delta
   public static deltaToHtml(delta: Delta): string {
     const tempDiv = document.createElement('div');
-    // Create a temporary Ritor-like context. Only $el is strictly needed by Renderer's current _doRender path.
-    // The Ritor instance itself isn't used by _doRender, only its $el.
-    const dummyRitorContext = { $el: tempDiv } as Ritor;
-    const tempRenderer = new Renderer(dummyRitorContext);
+    const tempRenderer = new Renderer(tempDiv); // CHANGED: Pass tempDiv directly
 
-    // Call the instance rendering logic on the temporary renderer, targeting tempDiv
-    tempRenderer._doRender(delta); // This will use tempRenderer.$el (which is tempDiv)
-                                  // and tempRenderer.currentBlockElement
+    tempRenderer.currentBlockElement = null; // Ensure fresh state for this temporary renderer
+    // Note: _doRender assumes its $el (tempDiv here) is already cleared by the caller's setup.
+    // tempRenderer.$el.innerHTML = ''; // This is done by _doRender if it's the instance method, or by public render.
+    // The public render() method clears this.$el.
+    // Our _doRender does not. So, deltaToHtml needs to clear its tempDiv before calling _doRender on tempRenderer.
+    // However, the _doRender method in the prompt for *this step* does not do the clearing.
+    // The public render() does. So, to mirror that:
+    tempDiv.innerHTML = ''; // Clear the tempDiv, as public render() would do for this.$el
+
+    tempRenderer._doRender(delta);
 
     return tempDiv.innerHTML;
   }

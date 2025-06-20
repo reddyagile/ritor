@@ -38,7 +38,7 @@ class Ritor extends EventEmitter {
 
     this.cursor = new Cursor(this); // Instantiate Cursor
     this.docManager = new DocumentManager(this); // DocumentManager needs Ritor for emit
-    this.renderer = new Renderer(this);
+    this.renderer = new Renderer(this.$el);
 
     // initializeModules will now use the correctly merged this.options.modules
     this.initializeModules();
