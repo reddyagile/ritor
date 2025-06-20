@@ -568,21 +568,28 @@ class DocumentManager {
   }
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
-    const newAttrs = { ...this.typingAttributes };
+    const newAttrs = { ...this.typingAttributes }; // Clone current state
 
-    if (explicitValue === null || explicitValue === false) { // Explicitly turn off or set to null
-        delete newAttrs[formatKey];
-    } else if (explicitValue === true) { // Explicitly turn on
+    if (explicitValue === null || explicitValue === false) {
+        // Explicitly turn off or set to null (which means remove/unset)
+        newAttrs[formatKey] = null; // Use null to signify removal by OpAttributeComposer
+    } else if (explicitValue === true) {
+        // Explicitly turn on
         newAttrs[formatKey] = true;
-    } else { // Toggle boolean state (if explicitValue is undefined)
-      if (newAttrs[formatKey]) {
-        delete newAttrs[formatKey];
-      } else {
-        newAttrs[formatKey] = true;
-      }
+    } else {
+        // Toggle boolean state (explicitValue is undefined)
+        // If the key is present and true, set to null (turn off).
+        // Otherwise (key not present, or present and false/null), set to true (turn on).
+        if (newAttrs[formatKey] === true) {
+            newAttrs[formatKey] = null; // Set to null to indicate it should be actively turned off
+        } else {
+            newAttrs[formatKey] = true;  // Turn on (or switch from null to true)
+        }
     }
+
+    // OpAttributeComposer.compose will handle cleaning up actual nulls if keepNull is false.
+    // For typingAttributes, we want to store the explicit null if user toggled off.
     this.typingAttributes = newAttrs;
-    // Emit even if newAttrs is empty, so UI can clear active states
     this.ritor.emit('typingattributes:change', this.getTypingAttributes());
   }
 }
