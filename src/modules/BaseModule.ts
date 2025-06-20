@@ -25,35 +25,36 @@ class BaseModule {
       this.$toolbar?.removeEventListener('click', clickHandler);
     });
 
-    // Listen to selection or document changes to update UI
+    // Listen to selection, document, and typing attribute changes to update UI
     this.ritor.on('cursor:change', this.updateActiveState.bind(this));
     this.ritor.on('document:change', this.updateActiveState.bind(this));
+    this.ritor.on('typingattributes:change', this.updateActiveState.bind(this)); // ADDED LISTENER
 
-    // Initial state update
+    // Initial state update - called directly. If Ritor isn't fully ready,
+    // its methods should gracefully return defaults (e.g. getTypingAttributes returns {}).
     this.updateActiveState();
   }
 
   // Handles toolbar button click
   public handleClick() {
-    if (this.options.formatAttributeKey && this.ritor && this.ritor.cursor) { // Check ritor.cursor
+    if (this.options.formatAttributeKey && this.ritor && this.ritor.cursor) {
       const attributeKey = this.options.formatAttributeKey;
+      const docSelection = this.ritor.cursor.getDocSelection();
 
-      const docSelection = this.ritor.cursor.getDocSelection(); // Use ritor.cursor
+      if (docSelection && docSelection.length === 0) { // Collapsed selection
+        // Toggle the typing attribute for this module's format
+        this.ritor.toggleTypingAttribute(attributeKey);
+        // The 'typingattributes:change' event (emitted by DocumentManager via Ritor)
+        // will be handled by updateActiveState to update the button's appearance.
+      } else if (docSelection && docSelection.length > 0) { // Range selection
+        // Existing logic: Determine if format should be applied or removed based on current selection state
+        const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection);
+        const isCurrentlyActive = !!currentFormats[attributeKey];
+        const formatValueToApply = isCurrentlyActive ? null : true; // Toggle: null to remove, true to add
 
-      // Apply format only if there's a selection with actual length
-      if (!docSelection || docSelection.length === 0) {
-        // Future: Handle toggling "typing attributes" for collapsed selection if desired.
-        // For now, only format non-collapsed selections.
-        return;
+        this.ritor.applyFormat({ [attributeKey]: formatValueToApply });
       }
-
-      // getFormatAt is on Ritor, which delegates to DocumentManager
-      const currentFormats: OpAttributes = this.ritor.getFormatAt(docSelection);
-      const isCurrentlyActive = !!currentFormats[attributeKey];
-      const formatValue = isCurrentlyActive ? null : true;
-      const formatToApply: OpAttributes = { [attributeKey]: formatValue };
-
-      this.ritor.applyFormat(formatToApply);
+      // If no docSelection (e.g., editor not focused), do nothing.
     }
   }
 

@@ -62,6 +62,9 @@ class Ritor extends EventEmitter {
     // Listen to keydown events (emitted by DomEvents.ts)
     this.on('keydown', this.handleGlobalKeydown.bind(this));
 
+    // Add a dedicated listener for 'cursor:change' to update typing attributes
+    this.on('cursor:change', this.handleCursorChangeForTypingAttributes.bind(this));
+
     // Perform initial render
     if(this.docManager && this.renderer) {
         this.renderer.render(this.docManager.getDocument());
@@ -302,6 +305,53 @@ class Ritor extends EventEmitter {
         currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
     }
     this.docManager.insertBlockBreak(currentDocSelection);
+  }
+
+  // --- New Public Methods for Typing Attributes ---
+
+  public getTypingAttributes(): OpAttributes {
+    if (!this.docManager) return {};
+    return this.docManager.getTypingAttributes();
+  }
+
+  public setTypingAttributes(attrs: OpAttributes): void {
+    if (!this.docManager) return;
+    this.docManager.setTypingAttributes(attrs);
+  }
+
+  public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
+    if (!this.docManager) return;
+    this.docManager.toggleTypingAttribute(formatKey, explicitValue);
+  }
+
+  // New method to handle cursor changes for typing attributes
+  private handleCursorChangeForTypingAttributes(): void {
+    if (!this.cursor || !this.docManager) {
+      return;
+    }
+
+    const selection = this.cursor.getDocSelection();
+
+    if (selection && selection.length === 0) { // Selection is collapsed
+      // Get formats at the current cursor position
+      const formatsAtCursor = this.docManager.getFormatAt(selection);
+      // Set these as the current typing attributes
+      this.docManager.setTypingAttributes(formatsAtCursor || {});
+      // setTypingAttributes in DocumentManager will emit 'typingattributes:change'
+      // which BaseModule's updateActiveState will listen to.
+    } else if (selection && selection.length > 0) { // A range is selected
+      // When a range is selected, clear typing attributes, as the primary focus
+      // is the selected range's format, not what will be typed next if selection collapses.
+      // Toolbar buttons will reflect the selected range's state via BaseModule's existing logic.
+      this.docManager.setTypingAttributes({});
+    } else { // No valid selection, or editor not focused. Clear typing attributes.
+      this.docManager.setTypingAttributes({});
+    }
+    // Note: BaseModule.updateActiveState also listens to 'cursor:change'.
+    // When selection is a range, it will use getFormatAt(selection).
+    // When selection is collapsed, it will now use getTypingAttributes().
+    // The call to setTypingAttributes here will emit 'typingattributes:change',
+    // ensuring BaseModule updates based on the fresh typing attributes.
   }
 }
 

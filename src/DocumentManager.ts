@@ -160,7 +160,8 @@ class OpAttributeComposer {
 class DocumentManager {
   public ritor: Ritor; // Keep for emit
   private currentDocument: Document;
-  public commandState: Map<string, boolean> = new Map();
+  public commandState: Map<string, boolean> = new Map(); // Keep for now, may be replaced by typingAttributes for some things
+  private typingAttributes: OpAttributesType = {}; // New state for typing attributes
 
   constructor(ritor: Ritor, initialDelta?: Delta) {
     this.ritor = ritor;
@@ -178,18 +179,41 @@ class DocumentManager {
     const currentDoc = this.getDocument();
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
-    let inheritedAttributes: OpAttributesType | undefined = undefined;
-    if (selection.length === 0) {
-      inheritedAttributes = this.getFormatAt(selection);
-      if (inheritedAttributes && Object.keys(inheritedAttributes).length === 0) {
-        inheritedAttributes = undefined;
-      }
+    let attributesForNewText: OpAttributesType | undefined = undefined;
+
+    if (selection.length === 0) { // Collapsed selection: apply typing attributes
+      const formatAtCursor = this.getFormatAt(selection); // Attributes of char before cursor
+      const currentTypingAttrs = this.getTypingAttributes(); // Explicitly set typing attributes
+
+      // Compose them: typing attributes should override/augment format at cursor.
+      // Example: cursor in bold text (formatAtCursor={bold:true}). User clicks italic (typingAttrs={italic:true}). New text bold & italic.
+      // Example: cursor in bold text. User toggles bold typing off (typingAttrs={bold:null}). New text not bold.
+      attributesForNewText = OpAttributeComposer.compose(formatAtCursor, currentTypingAttrs);
+      // OpAttributeComposer.compose already handles nulls to remove attributes.
+      // It also returns undefined if the result is an empty attribute object.
+
     }
-    if (selection.index > 0) { ops.push({ retain: selection.index }); }
-    if (selection.length > 0) { ops.push({ delete: selection.length }); }
-    if (inheritedAttributes) { ops.push({ insert: text, attributes: inheritedAttributes }); }
-    else { ops.push({ insert: text }); }
+    // If selection.length > 0 (replacing text), attributesForNewText remains undefined.
+    // The new text will be inserted "plain" and its final format will depend on
+    // compose merging with surrounding content if attributes were undefined.
+    // This is standard behavior for replacing text.
+
+    if (selection.index > 0) {
+      ops.push({ retain: selection.index });
+    }
+    if (selection.length > 0) {
+      ops.push({ delete: selection.length });
+    }
+
+    // Create the insert op with the determined attributes
+    const insertOp: Op = { insert: text };
+    if (attributesForNewText) { // Only add attributes object if it's defined (not empty)
+      insertOp.attributes = attributesForNewText;
+    }
+    ops.push(insertOp);
+
     newCursorIndex = selection.index + text.length;
+
     const docLength = currentDoc.getDelta().length();
     const originalSegmentEndIndex = selection.index + selection.length;
     if (docLength > originalSegmentEndIndex) {
@@ -334,19 +358,19 @@ class DocumentManager {
                  areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
 
         const newIsPureBlockBreak = (newOp.insert === '\n' && (!newOp.attributes || Object.keys(newOp.attributes).length === 0));
-        const lastOpEndsWithNewline = lastOp.insert.endsWith('\n');
+        const lastOpEndsWithNewline = (typeof lastOp.insert === 'string' && lastOp.insert.endsWith('\n'));
 
         if (newIsPureBlockBreak) {
-          // A pure newline break always creates a new operation.
+          // If newOp is a pure newline (e.g. from Enter), always push it as a new op.
           resultOps.push(newOp);
         } else if (lastOpEndsWithNewline && newOp.insert !== "") {
-          // If lastOp ended with a newline (was a block break or contained one),
-          // and newOp is text, newOp should start a new operation.
+          // If lastOp ended with a newline, and newOp is text content,
+          // newOp should start a new operation (new paragraph's content).
           resultOps.push(newOp);
-        }
-        else {
-          // Both are text content (neither is a pure block break, lastOp doesn't end in if newOp is text),
-          // and attributes match. Merge them.
+        } else {
+          // Both are text content (neither is a pure block break immediately following text,
+          // or lastOp didn't end with a newline). Attributes match. Merge them.
+          // This also handles merging multiple pure newlines if that case were to pass the above.
           lastOp.insert += newOp.insert;
         }
       } else {
@@ -475,15 +499,15 @@ class DocumentManager {
                    typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string' &&
                    areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
 
-           const currentIsPureBlockBreak = (currentOp.insert === '\n' && (!currentOp.attributes || Object.keys(currentOp.attributes).length === 0));
-           const lastMergedOpEndsWithNewline = lastMergedOp.insert.endsWith('\n');
+           const currentIsPureNewline = (currentOp.insert === '\n' && (!currentOp.attributes || Object.keys(currentOp.attributes).length === 0));
+           const lastMergedIsPureNewline = (lastMergedOp.insert === '\n' && (!lastMergedOp.attributes || Object.keys(lastMergedOp.attributes).length === 0));
 
-           if (currentIsPureBlockBreak) {
+           if (currentIsPureNewline && !lastMergedIsPureNewline) {
                mergedFinalOps.push(currentOp);
-           } else if (lastMergedOpEndsWithNewline && currentOp.insert !== "") {
+           } else if (!currentIsPureNewline && lastMergedIsPureNewline) {
                mergedFinalOps.push(currentOp);
-           }
-           else {
+           } else {
+               // Both are text with same attributes, or both are pure newlines with same attributes.
                lastMergedOp.insert += currentOp.insert;
            }
         } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
@@ -529,6 +553,37 @@ class DocumentManager {
 
     const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
     this.ritor.emit('document:change', this.currentDocument, newSelection);
+  }
+
+  // --- New Typing Attributes Methods ---
+  public getTypingAttributes(): OpAttributesType {
+    // Return a clone to prevent external modification
+    return { ...this.typingAttributes };
+  }
+
+  public setTypingAttributes(attrs: OpAttributesType): void {
+    this.typingAttributes = attrs ? { ...attrs } : {}; // Ensure attrs is not null/undefined before spread
+    // Emit an event so UI can update (e.g., toolbar buttons)
+    this.ritor.emit('typingattributes:change', this.getTypingAttributes());
+  }
+
+  public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
+    const newAttrs = { ...this.typingAttributes };
+
+    if (explicitValue === null || explicitValue === false) { // Explicitly turn off or set to null
+        delete newAttrs[formatKey];
+    } else if (explicitValue === true) { // Explicitly turn on
+        newAttrs[formatKey] = true;
+    } else { // Toggle boolean state (if explicitValue is undefined)
+      if (newAttrs[formatKey]) {
+        delete newAttrs[formatKey];
+      } else {
+        newAttrs[formatKey] = true;
+      }
+    }
+    this.typingAttributes = newAttrs;
+    // Emit even if newAttrs is empty, so UI can clear active states
+    this.ritor.emit('typingattributes:change', this.getTypingAttributes());
   }
 }
 export default DocumentManager;
