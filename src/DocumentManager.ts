@@ -11,12 +11,21 @@ class OpUtils {
   static getOpLength(op: Op): number {
     if (typeof op.delete === 'number') return op.delete;
     if (typeof op.retain === 'number') return op.retain;
-    if (typeof op.insert === 'string') return op.insert.length;
-    // For ops that aren't insert/delete/retain or are invalid
-    if (op.insert === undefined && op.delete === undefined && op.retain === undefined) return 0;
-    // If it's an op like { attributes: { bold: true } } (retain 0 implicitly)
-    // This case should ideally not happen with well-formed Deltas where retains specify length.
-    // For safety in getOpLength, if it's not a known op type with length, return 0.
+    if (typeof op.insert === 'string') {
+      return op.insert.length;
+    }
+    // Check if op.insert is our ParagraphBreakMarker object
+    if (typeof op.insert === 'object' && op.insert !== null && (op.insert as any).paragraphBreak === true) {
+      return 1; // ParagraphBreakMarker has a conceptual length of 1
+    }
+
+    // Fallback for ops that aren't insert/delete/retain or are invalid/empty
+    // (e.g. insert:undefined, or an unrecognized insert object type)
+    if (op.insert === undefined && op.delete === undefined && op.retain === undefined) {
+        return 0; // Truly empty op (e.g. from DeltaIterator.next() on exhaustion)
+    }
+    // If it's an op like { attributes: { bold: true } } (retain 0 implicitly by some conventions, but our ops should have a primary key)
+    // or an unknown insert object type.
     return 0;
   }
 }
@@ -165,7 +174,9 @@ class DocumentManager {
 
   constructor(ritor: Ritor, initialDelta?: Delta) {
     this.ritor = ritor;
-    this.currentDocument = new Document(initialDelta || new Delta().push({ insert: '\n' }));
+    // MODIFIED: Default initial content now uses ParagraphBreakMarker
+    const defaultInitialOps: Op[] = [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
+    this.currentDocument = new Document(initialDelta || new Delta(defaultInitialOps));
   }
 
   public getDocument(): Document {
@@ -353,27 +364,44 @@ class DocumentManager {
         lastOp.delete += newOp.delete;
       } else if (newOp.retain && lastOp.retain && areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
         lastOp.retain += newOp.retain;
-      } else if (newOp.insert && lastOp.insert &&
-                 typeof newOp.insert === 'string' && typeof lastOp.insert === 'string' &&
-                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
+      } else if (newOp.insert !== undefined && lastOp.insert !== undefined && // Check for undefined insert
+                areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
 
-        const newIsPureBlockBreak = (newOp.insert === '\n' && (!newOp.attributes || Object.keys(newOp.attributes).length === 0));
-        const lastOpEndsWithNewline = (typeof lastOp.insert === 'string' && lastOp.insert.endsWith('\n'));
+        const newIsString = typeof newOp.insert === 'string';
+        const lastIsString = typeof lastOp.insert === 'string';
+        const isParagraphBreakMarker = (val: any): val is ParagraphBreakMarker =>
+            typeof val === 'object' && val !== null && val.paragraphBreak === true;
 
-        if (newIsPureBlockBreak) {
-          // If newOp is a pure newline (e.g. from Enter), always push it as a new op.
-          resultOps.push(newOp);
-        } else if (lastOpEndsWithNewline && newOp.insert !== "") {
-          // If lastOp ended with a newline, and newOp is text content,
-          // newOp should start a new operation (new paragraph's content).
+        const newIsParaBreak = isParagraphBreakMarker(newOp.insert);
+        const lastIsParaBreak = isParagraphBreakMarker(lastOp.insert);
+
+        if (newIsString && lastIsString) {
+          if (newOp.insert === '\n' && !lastOp.insert.endsWith('\n') && !lastIsParaBreak) { // Ensure last was not already a block break obj
+              resultOps.push(newOp); // text +
+ string
+          } else if (lastOp.insert.endsWith('\n') && newOp.insert !== '\n' && newOp.insert !== "") {
+              resultOps.push(newOp); // text
+ + text
+          } else if (newOp.insert === '\n' && lastOp.insert === '\n') { //
+ string +
+ string
+             lastOp.insert += newOp.insert; // Merge multiple newlines in string ops
+          }
+          else if (newOp.insert !== '\n' && lastOp.insert !== '\n' && !lastOp.insert.endsWith('\n')) {
+             lastOp.insert += newOp.insert; // text + text
+          } else {
+             resultOps.push(newOp); // Default to no merge if conditions complex or involve mixed newline/text
+          }
+        } else if (isNewParaBreak || isLastParaBreak) {
+          // If either is a para break object, don't merge with strings or each other.
+          // Consecutive ParaBreakMarkers are not merged by this pushOp logic.
           resultOps.push(newOp);
         } else {
-          // Both are text content (neither is a pure block break immediately following text,
-          // or lastOp didn't end with a newline). Attributes match. Merge them.
-          // This also handles merging multiple pure newlines if that case were to pass the above.
-          lastOp.insert += newOp.insert;
+          // This else implies both are strings but didn't meet earlier string merge conditions,
+          // or one/both are unknown insert types. This path should ideally not be hit with current Op types.
+          resultOps.push(newOp);
         }
-      } else {
+      } else { // Different op types (e.g. insert vs retain) or first op, or attributes differ
         resultOps.push(newOp);
       }
     };
@@ -443,15 +471,25 @@ class DocumentManager {
         iterA.next(length);
         iterB.next(length);
       } else if (typeA === 'insert' && typeB === 'retain') {
-        if (!opA || !opB || typeof opA.insert !== 'string' || typeof opB.retain !== 'number') {
-          if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue;
+        if (!opA || !opB || opA.insert === undefined || typeof opB.retain !== 'number') {
+            if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue;
         }
-        const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
+
+        const currentAttributesA = opA.attributes;
+        const attributesToApplyB = opB.attributes;
+        const newAttributes = OpAttributeComposer.compose(currentAttributesA, attributesToApplyB, true);
+
         const length = Math.min(OpUtils.getOpLength(opA), opB.retain);
+
         if (length > 0) {
           const opAWithValue = iterA.next(length);
+
           if (opAWithValue && opAWithValue.insert !== undefined) {
-            pushOp({ insert: opAWithValue.insert, attributes });
+            if (typeof opAWithValue.insert === 'string') {
+              pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
+            } else { // It's a ParagraphBreakMarker (or other future object type)
+              pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
+            }
           }
         }
         iterB.next(length);
@@ -535,10 +573,10 @@ class DocumentManager {
       ops.push({ delete: selection.length });
     }
 
-    // Insert the newline character that signifies a block break (paragraph)
-    // For now, it's a simple newline. Later, this op could carry block attributes.
-    ops.push({ insert: '\n' });
-    newCursorIndex = selection.index + 1; // Cursor after the inserted newline
+    // Insert the ParagraphBreakMarker object
+    ops.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
+
+    newCursorIndex = selection.index + 1; // Cursor after the inserted paragraph break (which has length 1)
 
     // Retain content after the original selection
     const docLength = currentDoc.getDelta().length();

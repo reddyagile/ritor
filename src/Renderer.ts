@@ -1,5 +1,5 @@
 // src/Renderer.ts
-// import Ritor from './Ritor'; // This import might become unused
+// import Ritor from './Ritor'; // This import might become unused if 'ritor' property is removed
 import { Document, Delta, Op, OpAttributes } from './Document';
 
 const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
@@ -10,13 +10,12 @@ const ATTRIBUTE_TO_TAG_MAP: Record<string, string> = {
 const BOOLEAN_ATTRIBUTES: string[] = ['bold', 'italic', 'underline'];
 
 export class Renderer {
-  // private ritor: Ritor; // REMOVE this if not used elsewhere
+  // private ritor: Ritor; // No longer used directly by most methods after constructor change
   private $el: HTMLElement;
   private currentBlockElement: HTMLElement | null = null;
 
-  constructor(el: HTMLElement) { // CHANGED parameter
-    // this.ritor = ritor; // REMOVE
-    this.$el = el;         // CHANGED to use the passed element
+  constructor(el: HTMLElement) {
+    this.$el = el;
   }
 
   private ensureCurrentBlock(defaultTag: string = 'P'): HTMLElement {
@@ -28,8 +27,6 @@ export class Renderer {
   }
 
   private closeCurrentBlock(): void {
-    // If a block is being closed and it's empty, ensure it has a <br> for visibility/selection.
-    // This is especially important if it's not the very last action of a full render.
     if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
       this.currentBlockElement.appendChild(document.createElement('br'));
     }
@@ -37,8 +34,7 @@ export class Renderer {
   }
 
   private createTextNodesAndApplyAttributes(text: string, attributes?: OpAttributes): Node[] {
-    // Replace standard spaces with non-breaking spaces for DOM rendering
-    const textWithNbsp = text.replace(/ /g, '\u00a0'); // Or String.fromCharCode(160)
+    const textWithNbsp = text.replace(/ /g, '\u00a0');
 
     if (textWithNbsp === "" && attributes && Object.keys(attributes).length > 0) {
         let styledNodeInner: Node = document.createTextNode("");
@@ -55,11 +51,9 @@ export class Renderer {
           }
         return [topStyledNode];
     }
-    // Use textWithNbsp for creating the text node if it's not just for an empty styled placeholder
     if (textWithNbsp === "") return [document.createTextNode("")];
 
-
-    let topNode: Node = document.createTextNode(textWithNbsp); // Use modified text
+    let topNode: Node = document.createTextNode(textWithNbsp);
     if (attributes) {
       for (const attrKey in attributes) {
         if (attributes.hasOwnProperty(attrKey) && attributes[attrKey] === true) {
@@ -75,134 +69,117 @@ export class Renderer {
     return [topNode];
   }
 
-  private renderOp(op: Op): void { // This uses instance methods ensureCurrentBlock, closeCurrentBlock
+  private renderOp(op: Op): void {
     if (op.insert !== undefined) {
-      let text = op.insert;
-      if (text.includes('\n')) {
-        const segments = text.split('\n');
-        segments.forEach((segment, index) => {
-          // Ensure a block for any segment, even if empty, if it's before a newline
-          // or if it's the first segment of an op that starts with text.
-          const block = this.ensureCurrentBlock();
-          if (segment) { // Only append if segment has text
-            const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
-            inlineNodes.forEach(node => block.appendChild(node));
-          }
-          // If there's a newline character following this segment
-          if (index < segments.length - 1) {
-            this.closeCurrentBlock();
-          }
-        });
-      } else { // No newlines in this insert op
-        const block = this.ensureCurrentBlock(); // Ensure a block exists
+      if (typeof op.insert === 'string') {
+        let text = op.insert;
+        const block = this.ensureCurrentBlock();
+
         if (text === "" && op.attributes && Object.keys(op.attributes).length > 0) {
           const inlineNodes = this.createTextNodesAndApplyAttributes("", op.attributes);
           inlineNodes.forEach(node => block.appendChild(node));
         } else if (text) {
-          const inlineNodes = this.createTextNodesAndApplyAttributes(text, op.attributes);
-          inlineNodes.forEach(node => block.appendChild(node));
+          const segments = text.split('\n');
+          segments.forEach((segment, index) => {
+            if (segment) {
+              const inlineNodes = this.createTextNodesAndApplyAttributes(segment, op.attributes);
+              inlineNodes.forEach(node => block.appendChild(node));
+            }
+            if (index < segments.length - 1) {
+              block.appendChild(document.createElement('br'));
+            }
+          });
         }
-        // If text is "" and no attributes, ensureCurrentBlock already made sure a block exists.
-        // It might remain empty until the next op or finalization.
+      } else if (typeof op.insert === 'object' && op.insert !== null && (op.insert as any).paragraphBreak === true) {
+        this.closeCurrentBlock();
       }
     }
   }
 
   private _doRender(delta: Delta): void {
-    // Assumes this.$el is already an empty container for this render pass,
-    // and this.currentBlockElement has been reset to null by the caller.
-
     if (!delta || !delta.ops || delta.ops.length === 0) {
       this.ensureCurrentBlock();
       this.closeCurrentBlock();
       return;
     }
-
     delta.ops.forEach(op => {
-      this.renderOp(op); // renderOp uses this.ensureCurrentBlock and this.closeCurrentBlock
+      this.renderOp(op);
     });
-
-    // Finalization logic
     if (this.currentBlockElement === null && this.$el.childNodes.length > 0) {
-      // This means the document ended with a newline character.
-      // A new block was conceptually started by closeCurrentBlock(). We need to ensure it exists in DOM.
       this.ensureCurrentBlock();
     }
-
     if (this.currentBlockElement && this.currentBlockElement.childNodes.length === 0) {
       this.currentBlockElement.appendChild(document.createElement('br'));
     } else if (this.$el.childNodes.length === 0) {
-      // This case covers if all ops resulted in no children (e.g. delta of only deletes on empty content)
-      // or if the delta was empty and the initial check was bypassed.
-      // As a final safety, ensure at least one block with a br.
       this.ensureCurrentBlock().appendChild(document.createElement('br'));
     }
   }
 
   public render(doc: Document): void {
-    this.$el.innerHTML = '';        // Clear main editor element
-    this.currentBlockElement = null; // Reset instance state for this render pass
-    this._doRender(doc.getDelta());  // Call the core logic
+    this.$el.innerHTML = '';
+    this.currentBlockElement = null;
+    this._doRender(doc.getDelta());
   }
 
   public static deltaToHtml(delta: Delta): string {
     let html = '';
     let currentParagraphContent = '';
+    let firstBlockEnsured = false;
 
     const finalizeParagraph = () => {
       html += `<p>${currentParagraphContent || '<br>'}</p>`;
       currentParagraphContent = '';
+      firstBlockEnsured = true;
     };
 
     if (!delta || !delta.ops || delta.ops.length === 0) {
         return '<p><br></p>';
     }
 
-    let firstBlockEnsured = false;
-
     delta.ops.forEach((op) => {
       if (op.insert !== undefined) {
-        let text = op.insert;
-        // Basic text escaping for HTML content should be done first
-        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-                   .replace(/"/g, '&quot;')
-                   .replace(/'/g, '&#39;');
+        if (typeof op.insert === 'string') {
+          let text = op.insert;
+          text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                     .replace(/"/g, '&quot;')
+                     .replace(/'/g, '&#39;');
 
-        const segments = text.split('\n');
-        segments.forEach((segment, i) => {
-          if (!firstBlockEnsured && html === '') {
-              firstBlockEnsured = true;
-          }
-          if (segment) {
-            let segmentHtml = segment;
-            // Apply inline styles
-            if (op.attributes) {
-              for (const attrKey in op.attributes) {
-                if (op.attributes.hasOwnProperty(attrKey) && op.attributes[attrKey] === true) {
-                  const tagName = ATTRIBUTE_TO_TAG_MAP[attrKey];
-                  if (tagName && BOOLEAN_ATTRIBUTES.includes(attrKey)) {
-                    segmentHtml = `<${tagName}>${segmentHtml}</${tagName}>`;
+          const segments = text.split('\n');
+          segments.forEach((segment, i) => {
+            if (!firstBlockEnsured && (segment || i < segments.length -1) ) {
+                firstBlockEnsured = true;
+            }
+            if (segment) {
+              let segmentHtml = segment;
+              if (op.attributes) {
+                for (const attrKey in op.attributes) {
+                  if (op.attributes.hasOwnProperty(attrKey) && op.attributes[attrKey] === true) {
+                    const tagName = ATTRIBUTE_TO_TAG_MAP[attrKey];
+                    if (tagName && BOOLEAN_ATTRIBUTES.includes(attrKey)) {
+                      segmentHtml = `<${tagName}>${segmentHtml}</${tagName}>`;
+                    }
                   }
                 }
               }
+              segmentHtml = segmentHtml.replace(/ /g, '&nbsp;');
+              currentParagraphContent += segmentHtml;
             }
-            // Replace spaces with &nbsp; in the final segmentHtml
-            segmentHtml = segmentHtml.replace(/ /g, '&nbsp;');
-            currentParagraphContent += segmentHtml;
+            if (i < segments.length - 1) {
+              currentParagraphContent += '<br>';
+            }
+          });
+        } else if (typeof op.insert === 'object' && op.insert !== null && (op.insert as any).paragraphBreak === true) {
+          if (currentParagraphContent || !firstBlockEnsured || (html.length > 0 && !html.endsWith("</p>")) ) {
+             finalizeParagraph();
+          } else if (firstBlockEnsured) {
+             finalizeParagraph();
           }
-
-          if (i < segments.length - 1) {
-            finalizeParagraph();
-            firstBlockEnsured = true;
-          }
-        });
+        }
       }
     });
 
-    if (currentParagraphContent ||
-        (delta.ops.length > 0 && delta.ops[delta.ops.length-1].insert?.endsWith('\n')) ||
-        html === '') {
-        finalizeParagraph();
+    if (currentParagraphContent || !firstBlockEnsured ) {
+      finalizeParagraph();
     }
 
     return html || "<p><br></p>";

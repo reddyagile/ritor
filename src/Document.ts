@@ -8,10 +8,15 @@ export interface OpAttributes {
   [key: string]: any;          // Index signature for extensibility (already present)
 }
 
+// New type for the paragraph break marker
+export interface ParagraphBreakMarker {
+  paragraphBreak: true; // The value is always true, its presence is the marker
+}
+
 export interface Op {
-  insert?: string;
-  delete?: number; // Number of characters to delete
-  retain?: number; // Number of characters to keep (often with new attributes)
+  insert?: string | ParagraphBreakMarker; // MODIFIED: insert can be string or ParagraphBreakMarker
+  delete?: number;
+  retain?: number;
   attributes?: OpAttributes;
 }
 
