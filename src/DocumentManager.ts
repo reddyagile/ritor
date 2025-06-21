@@ -180,23 +180,50 @@ class DocumentManager {
     return this.currentDocument;
   }
 
+  private _getOpAtIndex(delta: Delta, index: number): { op: Op | null, opIndex: number, opOffset: number, opAbsoluteIndex: number } {
+    let currentPos = 0;
+    for (let i = 0; i < delta.ops.length; i++) {
+      const op = delta.ops[i];
+      const opLen = OpUtils.getOpLength(op);
+      if ((index >= currentPos && index < currentPos + opLen) || (index === currentPos && opLen === 0)) {
+        return { op: op, opIndex: i, opOffset: index - currentPos, opAbsoluteIndex: currentPos };
+      }
+      currentPos += opLen;
+    }
+    if (index === currentPos) {
+        return { op: null, opIndex: delta.ops.length, opOffset: 0, opAbsoluteIndex: currentPos };
+    }
+    return { op: null, opIndex: -1, opOffset: 0, opAbsoluteIndex: -1 };
+  }
+
   public insertText(text: string, selection: DocSelection) {
     const currentDoc = this.getDocument();
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
     let attributesForNewText: OpAttributesType | undefined = undefined;
+    let lengthToDelete = selection.length;
 
     if (selection.length === 0) {
-      const formatAtCursor = this.getFormatAt(selection);
-      const currentTypingAttrs = this.getTypingAttributes();
-      attributesForNewText = OpAttributeComposer.compose(formatAtCursor, currentTypingAttrs);
+      attributesForNewText = this.getFormatAt(selection);
+      const typingAttrs = this.getTypingAttributes();
+      attributesForNewText = OpAttributeComposer.compose(attributesForNewText, typingAttrs);
+
+      const opData = this._getOpAtIndex(currentDoc.getDelta(), selection.index);
+      if (opData.op &&
+          opData.op.insert &&
+          typeof opData.op.insert === 'object' &&
+          (opData.op.insert as ParagraphBreakMarker).paragraphBreak === true &&
+          opData.opOffset === 0) {
+        lengthToDelete = 1;
+      }
     }
 
     if (selection.index > 0) {
       ops.push({ retain: selection.index });
     }
-    if (selection.length > 0) {
-      ops.push({ delete: selection.length });
+
+    if (lengthToDelete > 0) {
+      ops.push({ delete: lengthToDelete });
     }
 
     const insertOp: Op = { insert: text };
@@ -208,13 +235,15 @@ class DocumentManager {
     newCursorIndex = selection.index + text.length;
 
     const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + selection.length;
+    const originalSegmentEndIndex = selection.index + lengthToDelete;
     if (docLength > originalSegmentEndIndex) {
       ops.push({ retain: docLength - originalSegmentEndIndex });
     }
+
     const change = new Delta(ops);
     const composedDelta = this.compose(currentDoc.getDelta(), change);
     this.currentDocument = new Document(composedDelta);
+
     const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
     this.ritor.emit('document:change', this.currentDocument, newSelection);
   }
@@ -349,24 +378,24 @@ class DocumentManager {
         lastOp.retain += newOp.retain;
       } else if (newOp.insert !== undefined && lastOp.insert !== undefined &&
                  areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
+          const newIsString = typeof newOp.insert === 'string';
+          const lastIsString = typeof lastOp.insert === 'string';
+          const newIsPBM = isParagraphBreakMarker(newOp.insert);
+          const lastIsPBM = isParagraphBreakMarker(lastOp.insert);
 
-        const newIsPBM = isParagraphBreakMarker(newOp.insert);
-        const lastIsPBM = isParagraphBreakMarker(lastOp.insert);
-
-        if (newIsPBM || lastIsPBM) {
-          resultOps.push(newOp);
-        } else {
-          const newInsertStr = newOp.insert as string; // Both are strings if not PBM
-          const lastInsertStr = lastOp.insert as string;
-
-          if (newInsertStr === '\n' && !lastInsertStr.endsWith('\n')) {
-            resultOps.push(newOp);
-          } else if (lastInsertStr.endsWith('\n') && newInsertStr !== '\n' && newInsertStr !== "") {
-            resultOps.push(newOp);
+          if (newIsPBM || lastIsPBM) {
+              resultOps.push(newOp);
           } else {
-            (lastOp.insert as string) += newInsertStr;
+              const newInsertStr = newOp.insert as string;
+              const lastInsertStr = lastOp.insert as string;
+              if (newInsertStr === '\n' && !lastInsertStr.endsWith('\n')) {
+                  resultOps.push(newOp);
+              } else if (lastInsertStr.endsWith('\n') && newInsertStr !== '\n' && newInsertStr !== "") {
+                  resultOps.push(newOp);
+              } else {
+                  (lastOp.insert as string) += newInsertStr;
+              }
           }
-        }
       } else {
         resultOps.push(newOp);
       }
@@ -479,8 +508,8 @@ class DocumentManager {
                    areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
             const currentIsString = typeof currentOp.insert === 'string';
             const lastMergedIsString = typeof lastMergedOp.insert === 'string';
-            const currentIsPBM = isParagraphBreakMarker(currentOp.insert);
-            const lastMergedIsPBM = isParagraphBreakMarker(lastMergedOp.insert);
+            const currentIsPBM = isParagraphBreakMarker(currentOp.insert); // Use local type guard
+            const lastMergedIsPBM = isParagraphBreakMarker(lastMergedOp.insert); // Use local type guard
 
             if (currentIsPBM || lastMergedIsPBM) {
                 mergedFinalOps.push(currentOp);
