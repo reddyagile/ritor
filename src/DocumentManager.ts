@@ -1,6 +1,6 @@
 // src/DocumentManager.ts
 import Ritor from './Ritor'; // Still needed for this.ritor.emit()
-import { Document, Delta, Op, OpAttributes as OpAttributesType } from './Document';
+import { Document, Delta, Op, OpAttributes as OpAttributesType, ParagraphBreakMarker } from './Document'; // Ensure ParagraphBreakMarker is imported
 import { DocSelection } from './types'; // Import from types.ts
 
 // Helper classes OpUtils, DeltaIterator, OpAttributeComposer remain here for now,
@@ -15,17 +15,13 @@ class OpUtils {
       return op.insert.length;
     }
     // Check if op.insert is our ParagraphBreakMarker object
-    if (typeof op.insert === 'object' && op.insert !== null && (op.insert as any).paragraphBreak === true) {
+    if (typeof op.insert === 'object' && op.insert !== null && (op.insert as ParagraphBreakMarker).paragraphBreak === true) {
       return 1; // ParagraphBreakMarker has a conceptual length of 1
     }
 
-    // Fallback for ops that aren't insert/delete/retain or are invalid/empty
-    // (e.g. insert:undefined, or an unrecognized insert object type)
     if (op.insert === undefined && op.delete === undefined && op.retain === undefined) {
-        return 0; // Truly empty op (e.g. from DeltaIterator.next() on exhaustion)
+        return 0;
     }
-    // If it's an op like { attributes: { bold: true } } (retain 0 implicitly by some conventions, but our ops should have a primary key)
-    // or an unknown insert object type.
     return 0;
   }
 }
@@ -42,55 +38,46 @@ class DeltaIterator {
   }
 
   hasNext(): boolean {
-    // Corrected: Ensure current op exists before trying to get its length
     if (this.index < this.ops.length) {
-        const currentOp = this.ops[this.index];
-        // Check if current op is valid and has length before using OpUtils.getOpLength
-        if (currentOp && (currentOp.insert !== undefined || currentOp.retain !== undefined || currentOp.delete !== undefined)) {
-             // If current op has an actual length, check offset against it
-            const len = OpUtils.getOpLength(currentOp);
-            if (len > 0) return this.offset < len;
-            // If current op has zero length (e.g. insert:""), but we are at it (offset 0), it's "consumable" by next()
-            // then hasNext should be true if there are more ops *after* this one.
-            // Or, if it's the last op and zero-length, hasNext should be false.
-            if (this.offset === 0 && len === 0) { // At a zero-length op
-                return true; // It can be "consumed" by next()
-            }
+      const currentOp = this.ops[this.index];
+      if (currentOp) {
+        const len = OpUtils.getOpLength(currentOp);
+        if (this.offset < len) {
+          return true;
         }
-        // If current op is invalid or zero-length and fully "consumed" (offset > 0 or offset === 0 and len === 0)
-        // then check if there's a next op in the array.
-        if (this.index < this.ops.length -1) {
-            return true;
-        }
+        return this.index < this.ops.length - 1;
+      }
     }
-    return false; // Default if all conditions fail
+    return false;
   }
 
-
   peek(): Op | null {
-    if (!this.hasNext()) return null; // Use hasNext to determine if peeking is valid
-    const currentOp = this.ops[this.index];
+    if (!this.hasNext()) return null;
 
-    // If hasNext is true, currentOp should be valid.
-    // Handle offset for partial peeking
+    const currentOp = this.ops[this.index];
+    if (!currentOp) return null;
+
     if (this.offset > 0) {
-      if (currentOp.insert !== undefined) {
+      if (typeof currentOp.insert === 'string') {
         return { insert: currentOp.insert.substring(this.offset), attributes: currentOp.attributes };
+      } else if (currentOp.insert && typeof currentOp.insert === 'object' && (currentOp.insert as ParagraphBreakMarker).paragraphBreak === true) {
+        return null;
       } else if (currentOp.retain !== undefined) {
         return { retain: currentOp.retain - this.offset, attributes: currentOp.attributes };
       } else if (currentOp.delete !== undefined) {
         return { delete: currentOp.delete - this.offset };
       }
+      return null;
     }
-    return currentOp; // Return full current op if offset is 0
+    return currentOp;
   }
 
   peekType(): string | null {
     const op = this.peek();
     if (!op) return null;
-    if (op.insert !== undefined) return 'insert';
-    if (op.delete !== undefined) return 'delete';
-    if (op.retain !== undefined) return 'retain';
+    if (op.hasOwnProperty('insert')) return 'insert';
+    if (op.hasOwnProperty('delete')) return 'delete';
+    if (op.hasOwnProperty('retain')) return 'retain';
     return null;
   }
 
@@ -98,27 +85,37 @@ class DeltaIterator {
     if (!this.hasNext()) return {};
 
     const currentOp = this.ops[this.index];
+    if (!currentOp) {
+        this.index++;
+        return {};
+    }
+
     const currentOpFullLength = OpUtils.getOpLength(currentOp);
-    const currentOpEffectiveLength = currentOpFullLength - this.offset;
+    const currentOpEffectiveRemainingLength = currentOpFullLength - this.offset;
 
     let opToReturn: Op;
-    const consumeLength = length == null ? currentOpEffectiveLength : Math.min(length, currentOpEffectiveLength);
+    const consumeLength = length == null ? currentOpEffectiveRemainingLength : Math.min(length, currentOpEffectiveRemainingLength);
 
-    if (consumeLength < 0) { // Should not happen with positive lengths and correct logic
-        this.index++; this.offset = 0; return {}; // Error or skip
+    if (consumeLength < 0) { this.index++; this.offset = 0; return {}; }
+
+    if (consumeLength === 0) {
+        if (currentOpFullLength === 0 && this.offset === 0) {
+             opToReturn = { ...currentOp };
+             this.index++;
+             this.offset = 0;
+             return opToReturn;
+        }
+        return {};
     }
-    // If current op is zero-length (e.g. insert:"") and consumeLength is also 0
-    if (consumeLength === 0 && currentOpEffectiveLength === 0) {
-        opToReturn = { ...currentOp }; // Return the zero-length op (e.g. insert:"", attributes:{...})
-        this.index++;
-        this.offset = 0;
-        return opToReturn;
-    }
 
-
-    if (currentOp.insert !== undefined) {
+    if (typeof currentOp.insert === 'string') {
       opToReturn = {
         insert: currentOp.insert.substring(this.offset, this.offset + consumeLength),
+        attributes: currentOp.attributes
+      };
+    } else if (currentOp.insert && typeof currentOp.insert === 'object' && (currentOp.insert as ParagraphBreakMarker).paragraphBreak === true) {
+      opToReturn = {
+        insert: { paragraphBreak: true } as ParagraphBreakMarker,
         attributes: currentOp.attributes
       };
     } else if (currentOp.retain !== undefined) {
@@ -130,10 +127,11 @@ class DeltaIterator {
       opToReturn = { delete: consumeLength };
     } else {
       opToReturn = {};
+      console.warn("DeltaIterator: Unknown op type in next()", currentOp);
     }
 
     this.offset += consumeLength;
-    if (this.offset >= currentOpFullLength) { // Use full length for advancing index
+    if (this.offset >= currentOpFullLength) {
       this.index++;
       this.offset = 0;
     }
@@ -167,14 +165,13 @@ class OpAttributeComposer {
 }
 
 class DocumentManager {
-  public ritor: Ritor; // Keep for emit
+  public ritor: Ritor;
   private currentDocument: Document;
-  public commandState: Map<string, boolean> = new Map(); // Keep for now, may be replaced by typingAttributes for some things
-  private typingAttributes: OpAttributesType = {}; // New state for typing attributes
+  public commandState: Map<string, boolean> = new Map();
+  private typingAttributes: OpAttributesType = {};
 
   constructor(ritor: Ritor, initialDelta?: Delta) {
     this.ritor = ritor;
-    // MODIFIED: Default initial content now uses ParagraphBreakMarker
     const defaultInitialOps: Op[] = [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
     this.currentDocument = new Document(initialDelta || new Delta(defaultInitialOps));
   }
@@ -183,31 +180,17 @@ class DocumentManager {
     return this.currentDocument;
   }
 
-  // Methods like insertText, formatText, deleteText, getFormatAt, clearFormat, compose
-  // remain, but no longer call any local cursor or selection mapping methods.
-  // They operate purely on DocSelection objects passed to them.
   public insertText(text: string, selection: DocSelection) {
     const currentDoc = this.getDocument();
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
     let attributesForNewText: OpAttributesType | undefined = undefined;
 
-    if (selection.length === 0) { // Collapsed selection: apply typing attributes
-      const formatAtCursor = this.getFormatAt(selection); // Attributes of char before cursor
-      const currentTypingAttrs = this.getTypingAttributes(); // Explicitly set typing attributes
-
-      // Compose them: typing attributes should override/augment format at cursor.
-      // Example: cursor in bold text (formatAtCursor={bold:true}). User clicks italic (typingAttrs={italic:true}). New text bold & italic.
-      // Example: cursor in bold text. User toggles bold typing off (typingAttrs={bold:null}). New text not bold.
+    if (selection.length === 0) {
+      const formatAtCursor = this.getFormatAt(selection);
+      const currentTypingAttrs = this.getTypingAttributes();
       attributesForNewText = OpAttributeComposer.compose(formatAtCursor, currentTypingAttrs);
-      // OpAttributeComposer.compose already handles nulls to remove attributes.
-      // It also returns undefined if the result is an empty attribute object.
-
     }
-    // If selection.length > 0 (replacing text), attributesForNewText remains undefined.
-    // The new text will be inserted "plain" and its final format will depend on
-    // compose merging with surrounding content if attributes were undefined.
-    // This is standard behavior for replacing text.
 
     if (selection.index > 0) {
       ops.push({ retain: selection.index });
@@ -216,9 +199,8 @@ class DocumentManager {
       ops.push({ delete: selection.length });
     }
 
-    // Create the insert op with the determined attributes
     const insertOp: Op = { insert: text };
-    if (attributesForNewText) { // Only add attributes object if it's defined (not empty)
+    if (attributesForNewText) {
       insertOp.attributes = attributesForNewText;
     }
     ops.push(insertOp);
@@ -276,20 +258,18 @@ class DocumentManager {
     const docDelta = this.currentDocument.getDelta();
     if (!docDelta || !docDelta.ops) return {};
     let index = selection.index;
-    if (selection.length === 0 && index > 0) { // For collapsed selection, look at char before
+    if (selection.length === 0 && index > 0) {
       index -= 1;
     } else if (selection.length > 0) {
-      // For a range, typically get attributes at the start of the range.
-      // Or, could be more complex to find common attributes. For now, start.
     }
     let currentPosition = 0;
     for (const op of docDelta.ops) {
-      let opLength = OpUtils.getOpLength(op); // Use OpUtils.getOpLength
+      let opLength = OpUtils.getOpLength(op);
 
       if (index >= currentPosition && index < currentPosition + opLength) {
         return op.attributes || {};
       }
-      if (opLength > 0) currentPosition += opLength; // Only advance if op has length
+      if (opLength > 0) currentPosition += opLength;
     }
     return {};
   }
@@ -348,7 +328,6 @@ class DocumentManager {
     }
 
     const pushOp = (newOp: Op) => {
-      // Skip ops that do nothing (retain 0, delete 0, or insert "" with no attributes)
       if ( (newOp.retain && newOp.retain <= 0 && !newOp.attributes) ||
            (newOp.delete && newOp.delete <= 0) ||
            (newOp.insert === "" && !newOp.attributes) ) {
@@ -364,44 +343,25 @@ class DocumentManager {
         lastOp.delete += newOp.delete;
       } else if (newOp.retain && lastOp.retain && areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
         lastOp.retain += newOp.retain;
-      } else if (newOp.insert !== undefined && lastOp.insert !== undefined && // Check for undefined insert
-                areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
+      } else if (newOp.insert !== undefined && lastOp.insert !== undefined &&
+                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
+          const newIsString = typeof newOp.insert === 'string';
+          const lastIsString = typeof lastOp.insert === 'string';
+          const isNewParaBreak = !newIsString;
+          const isLastParaBreak = !lastIsString;
 
-        const newIsString = typeof newOp.insert === 'string';
-        const lastIsString = typeof lastOp.insert === 'string';
-        const isParagraphBreakMarker = (val: any): val is ParagraphBreakMarker =>
-            typeof val === 'object' && val !== null && val.paragraphBreak === true;
-
-        const newIsParaBreak = isParagraphBreakMarker(newOp.insert);
-        const lastIsParaBreak = isParagraphBreakMarker(lastOp.insert);
-
-        if (newIsString && lastIsString) {
-          if (newOp.insert === '\n' && !lastOp.insert.endsWith('\n') && !lastIsParaBreak) { // Ensure last was not already a block break obj
-              resultOps.push(newOp); // text +
- string
-          } else if (lastOp.insert.endsWith('\n') && newOp.insert !== '\n' && newOp.insert !== "") {
-              resultOps.push(newOp); // text
- + text
-          } else if (newOp.insert === '\n' && lastOp.insert === '\n') { //
- string +
- string
-             lastOp.insert += newOp.insert; // Merge multiple newlines in string ops
-          }
-          else if (newOp.insert !== '\n' && lastOp.insert !== '\n' && !lastOp.insert.endsWith('\n')) {
-             lastOp.insert += newOp.insert; // text + text
+          if (isNewParaBreak || isLastParaBreak) {
+              resultOps.push(newOp);
           } else {
-             resultOps.push(newOp); // Default to no merge if conditions complex or involve mixed newline/text
+              if (newOp.insert === '\n' && !lastOp.insert.endsWith('\n')) {
+                  resultOps.push(newOp);
+              } else if (lastOp.insert.endsWith('\n') && newOp.insert !== '\n' && newOp.insert !== "") {
+                  resultOps.push(newOp);
+              } else {
+                  lastOp.insert += newOp.insert;
+              }
           }
-        } else if (isNewParaBreak || isLastParaBreak) {
-          // If either is a para break object, don't merge with strings or each other.
-          // Consecutive ParaBreakMarkers are not merged by this pushOp logic.
-          resultOps.push(newOp);
-        } else {
-          // This else implies both are strings but didn't meet earlier string merge conditions,
-          // or one/both are unknown insert types. This path should ideally not be hit with current Op types.
-          resultOps.push(newOp);
-        }
-      } else { // Different op types (e.g. insert vs retain) or first op, or attributes differ
+      } else {
         resultOps.push(newOp);
       }
     };
@@ -425,36 +385,17 @@ class DocumentManager {
                 if (!nextA) break;
                 const nextALength = OpUtils.getOpLength(nextA);
                 const consumeLength = Math.min(length, nextALength);
-                if (nextA.retain && consumeLength > 0) { // Only delete if it's a retain op from A
+                if (nextA.retain && consumeLength > 0) {
                     iterA.next(consumeLength);
-                } else if (nextA.insert && consumeLength > 0) { // Or if it's an insert op from A
+                } else if (nextA.insert && consumeLength > 0) {
                     iterA.next(consumeLength);
-                } else if (consumeLength === 0 && nextALength === 0) { // Skip zero-length ops in A
+                } else if (consumeLength === 0 && nextALength === 0) {
                     iterA.next();
                     continue;
                 } else {
-                    // Cannot delete from this op type, or consumeLength is 0 but op has length
-                    // This implies iterA should not be consumed here by a delete from B.
-                    // This path should ideally not be taken if deltaB is well-formed against deltaA.
-                    // If iterA.peek() is not retain or insert, a delete op from B can't apply to it.
-                    // However, the `length` of delete op from B still needs to be satisfied.
-                    // This usually means deltaB is malformed or deltaA is not what B expects.
-                    // For robustness, we might skip consuming A here if it's not consumable by delete.
-                    // But the delete length from B still needs to be "accounted for".
-                    // This is where true op transformation logic gets complex.
-                    // For now, if A's op is not insert/retain, the delete from B effectively skips it.
-                    // This means `length` doesn't decrease, and we might infinite loop if iterA doesn't advance.
-                    // Let's assume for this simplified compose that deletes in B only apply to retain/insert in A.
-                    // If iterA.peek() is a delete, this delete op from B is relative to A *after* A's delete.
-                    // So we must advance A.
-                    if(typeA === 'delete') { // A also has a delete, let A's delete go first
+                    if(typeA === 'delete') {
                         pushOp(iterA.next());
-                        // length for B's delete is not reduced here, it will be processed against next op of A
                     } else {
-                        // If A's op is not retain or insert, B's delete op can't apply to it.
-                        // This is a mismatch. For this simplified compose, we'll assume B's delete
-                        // is "lost" against this non-deletable op from A. Or, advance A.
-                        // To be safe and avoid infinite loops if B's delete length never reduces:
                         if (nextALength > 0) iterA.next(consumeLength); else iterA.next();
                     }
                 }
@@ -485,11 +426,7 @@ class DocumentManager {
           const opAWithValue = iterA.next(length);
 
           if (opAWithValue && opAWithValue.insert !== undefined) {
-            if (typeof opAWithValue.insert === 'string') {
-              pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
-            } else { // It's a ParagraphBreakMarker (or other future object type)
-              pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
-            }
+            pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
           }
         }
         iterB.next(length);
@@ -517,7 +454,6 @@ class DocumentManager {
       }
       if (processedOp.delete && processedOp.delete <= 0) return;
       if (processedOp.retain && processedOp.retain <= 0 && !processedOp.attributes) return;
-      // Skip empty inserts that have no attributes
       if (processedOp.insert === "" && !processedOp.attributes) {
         return;
       }
@@ -533,21 +469,24 @@ class DocumentManager {
         const lastMergedOp = mergedFinalOps[mergedFinalOps.length - 1];
         if (currentOp.delete && lastMergedOp.delete) {
           lastMergedOp.delete += currentOp.delete;
-        } else if (currentOp.insert && lastMergedOp.insert &&
-                   typeof currentOp.insert === 'string' && typeof lastMergedOp.insert === 'string' &&
+        } else if (currentOp.insert !== undefined && lastMergedOp.insert !== undefined &&
                    areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
+            const currentIsString = typeof currentOp.insert === 'string';
+            const lastMergedIsString = typeof lastMergedOp.insert === 'string';
+            const isNewParaBreak = !currentIsString;
+            const isLastParaBreak = !lastMergedIsString;
 
-           const currentIsPureNewline = (currentOp.insert === '\n' && (!currentOp.attributes || Object.keys(currentOp.attributes).length === 0));
-           const lastMergedIsPureNewline = (lastMergedOp.insert === '\n' && (!lastMergedOp.attributes || Object.keys(lastMergedOp.attributes).length === 0));
-
-           if (currentIsPureNewline && !lastMergedIsPureNewline) {
-               mergedFinalOps.push(currentOp);
-           } else if (!currentIsPureNewline && lastMergedIsPureNewline) {
-               mergedFinalOps.push(currentOp);
-           } else {
-               // Both are text with same attributes, or both are pure newlines with same attributes.
-               lastMergedOp.insert += currentOp.insert;
-           }
+            if (isNewParaBreak || isLastParaBreak) {
+                mergedFinalOps.push(currentOp);
+            } else { // Both are strings
+                if (currentOp.insert === '\n' && !lastMergedOp.insert.endsWith('\n')) {
+                     mergedFinalOps.push(currentOp);
+                } else if (lastMergedOp.insert.endsWith('\n') && currentOp.insert !== '\n' && currentOp.insert !== "") {
+                     mergedFinalOps.push(currentOp);
+                } else {
+                    lastMergedOp.insert += currentOp.insert;
+                }
+            }
         } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
           lastMergedOp.retain += currentOp.retain;
         } else {
@@ -563,22 +502,18 @@ class DocumentManager {
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
 
-    // Retain content before the selection
     if (selection.index > 0) {
       ops.push({ retain: selection.index });
     }
 
-    // Delete content if selection is not collapsed
     if (selection.length > 0) {
       ops.push({ delete: selection.length });
     }
 
-    // Insert the ParagraphBreakMarker object
     ops.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
 
-    newCursorIndex = selection.index + 1; // Cursor after the inserted paragraph break (which has length 1)
+    newCursorIndex = selection.index + 1;
 
-    // Retain content after the original selection
     const docLength = currentDoc.getDelta().length();
     const originalSegmentEndIndex = selection.index + selection.length;
     if (docLength > originalSegmentEndIndex) {
@@ -593,40 +528,29 @@ class DocumentManager {
     this.ritor.emit('document:change', this.currentDocument, newSelection);
   }
 
-  // --- New Typing Attributes Methods ---
   public getTypingAttributes(): OpAttributesType {
-    // Return a clone to prevent external modification
     return { ...this.typingAttributes };
   }
 
   public setTypingAttributes(attrs: OpAttributesType): void {
-    this.typingAttributes = attrs ? { ...attrs } : {}; // Ensure attrs is not null/undefined before spread
-    // Emit an event so UI can update (e.g., toolbar buttons)
+    this.typingAttributes = attrs ? { ...attrs } : {};
     this.ritor.emit('typingattributes:change', this.getTypingAttributes());
   }
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
-    const newAttrs = { ...this.typingAttributes }; // Clone current state
+    const newAttrs = { ...this.typingAttributes };
 
     if (explicitValue === null || explicitValue === false) {
-        // Explicitly turn off or set to null (which means remove/unset)
-        newAttrs[formatKey] = null; // Use null to signify removal by OpAttributeComposer
+        newAttrs[formatKey] = null;
     } else if (explicitValue === true) {
-        // Explicitly turn on
         newAttrs[formatKey] = true;
     } else {
-        // Toggle boolean state (explicitValue is undefined)
-        // If the key is present and true, set to null (turn off).
-        // Otherwise (key not present, or present and false/null), set to true (turn on).
         if (newAttrs[formatKey] === true) {
-            newAttrs[formatKey] = null; // Set to null to indicate it should be actively turned off
+            newAttrs[formatKey] = null;
         } else {
-            newAttrs[formatKey] = true;  // Turn on (or switch from null to true)
+            newAttrs[formatKey] = true;
         }
     }
-
-    // OpAttributeComposer.compose will handle cleaning up actual nulls if keepNull is false.
-    // For typingAttributes, we want to store the explicit null if user toggled off.
     this.typingAttributes = newAttrs;
     this.ritor.emit('typingattributes:change', this.getTypingAttributes());
   }
