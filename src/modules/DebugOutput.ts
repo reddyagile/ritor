@@ -83,7 +83,7 @@ class DebugOutput {
       return;
     }
 
-    const currentDelta = docManager.getDocument().getDelta(); // No need for ternary if guard above ensures docManager exists
+    const currentDelta = docManager.getDocument(); // docManager.getDocument() now returns a Delta directly
     const currentDomRange = this.ritor.cursor.getDomRange();
 
     let currentDocSelection: DocSelection | null = null;

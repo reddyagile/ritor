@@ -5,7 +5,7 @@ import EventEmitter from './EventEmitter';
 import { Module, ModuleOptions, RitorOptions, DocSelection } from './types'; // DocSelection from types
 import { Renderer } from './Renderer';
 import { isObject } from './utils';
-import { Document, OpAttributes } from './Document';
+import { Delta, OpAttributes } from './Document'; // Import Delta instead of Document
 import Cursor from './Cursor'; // Import Cursor
 import DocumentManager from './DocumentManager'; // DocumentManager still needed
 
@@ -48,12 +48,17 @@ class Ritor extends EventEmitter {
     this.initialized = true;
     this.emit('editor:init');
 
-    this.on('document:change', (newDoc: Document, newSelection?: DocSelection) => {
-      if (this.renderer && newDoc) {
-        this.renderer.render(newDoc);
-        if (newSelection) {
-          this.cursor.setDocSelection(newSelection);
+    // newDoc from document:change event is a Delta object { change: Delta, newDocument: Delta }
+    // DocumentManager emits: this.emit('document:change', { change: finalChangeDelta, newDocument: this.currentDocument });
+    this.on('document:change', (eventData: { change: Delta, newDocument: Delta, newSelection?: DocSelection }) => {
+      if (this.renderer && eventData.newDocument) {
+        this.renderer.render(eventData.newDocument);
+        if (eventData.newSelection) {
+          this.cursor.setDocSelection(eventData.newSelection);
         }
+        // We might not need to emit cursor:change here if setDocSelection already does,
+        // or if the natural flow of events handles it.
+        // For now, keeping it to ensure UI updates if they depend on this event after render.
         this.emit('cursor:change');
       }
     });
@@ -212,13 +217,18 @@ class Ritor extends EventEmitter {
   }
 
   public getFormatAt(selection: DocSelection): OpAttributes {
-    if (!this.docManager) return {};
-    return this.docManager.getFormatAt(selection);
+    if (!this.docManager || !selection) return {};
+    return this.docManager.getFormatAt(selection.index, selection.length);
   }
 
   public clearFormatting(selection: DocSelection): void {
-      if (!this.docManager) return;
-      this.docManager.clearFormat(selection);
+    if (!this.docManager || !selection) return;
+    // Clear common formats.
+    this.docManager.formatText('bold', null, selection);
+    this.docManager.formatText('italic', null, selection);
+    this.docManager.formatText('underline', null, selection);
+    // this.docManager.formatText('strike', null, selection);
+    // this.docManager.formatText('link', null, selection);
   }
 
   public handleCharacterInput(char: string): void {
@@ -232,29 +242,21 @@ class Ritor extends EventEmitter {
 
   public handleBackspace(): void {
     if (!this.docManager || !this.cursor) return;
-    let currentDocSelection = this.cursor.getDocSelection();
+    const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
-      if (currentDocSelection.length === 0 && currentDocSelection.index > 0) {
-        currentDocSelection = { index: currentDocSelection.index - 1, length: 1 };
-      }
-      if (currentDocSelection.length > 0) {
-        this.docManager.deleteText(currentDocSelection);
-        this._isTogglingTypingAttribute = false;
-      }
+      // DocumentManager's deleteText will handle 0-length selection appropriately with 'backward'
+      this.docManager.deleteText('backward', currentDocSelection);
+      this._isTogglingTypingAttribute = false;
     }
   }
 
   public handleDelete(): void {
     if (!this.docManager || !this.cursor) return;
-    let currentDocSelection = this.cursor.getDocSelection();
+    const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
-      if (currentDocSelection.length === 0) {
-         currentDocSelection = { index: currentDocSelection.index, length: 1};
-      }
-      if (currentDocSelection.length > 0) {
-        this.docManager.deleteText(currentDocSelection);
-        this._isTogglingTypingAttribute = false;
-      }
+      // DocumentManager's deleteText will handle 0-length selection appropriately with 'forward'
+      this.docManager.deleteText('forward', currentDocSelection);
+      this._isTogglingTypingAttribute = false;
     }
   }
 
@@ -271,10 +273,12 @@ class Ritor extends EventEmitter {
     if (!this.docManager || !this.cursor) return;
     const currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection && currentDocSelection.length > 0) {
-      this.docManager.formatText(attributes, currentDocSelection);
+      for (const key in attributes) {
+        if (Object.prototype.hasOwnProperty.call(attributes, key)) {
+          this.docManager.formatText(key, attributes[key], currentDocSelection);
+        }
+      }
       // Note: applyFormat applies to a range, it doesn't set typing attributes directly.
-      // The cursor:change event after this will update typing attributes from content.
-      // So, no need to set _isTogglingTypingAttribute = false here.
     }
   }
 
@@ -282,7 +286,8 @@ class Ritor extends EventEmitter {
     if (!this.docManager) {
       return '';
     }
-    const currentDelta = this.docManager.getDocument().getDelta();
+    // getDocument() now returns a Delta directly
+    const currentDelta = this.docManager.getDocument();
     return Renderer.deltaToHtml(currentDelta);
   }
 
@@ -290,7 +295,8 @@ class Ritor extends EventEmitter {
     if (!this.docManager || !this.cursor) return;
     let currentDocSelection = this.cursor.getDocSelection();
     if (!currentDocSelection) {
-        currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
+        // getDocument() returns a Delta, which has a length() method
+        currentDocSelection = { index: this.docManager.getDocument().length(), length: 0 };
     }
     this.docManager.insertBlockBreak(currentDocSelection);
     this._isTogglingTypingAttribute = false;
@@ -321,9 +327,11 @@ class Ritor extends EventEmitter {
     }
     const selection = this.cursor.getDocSelection();
     if (selection && selection.length === 0) {
-      const formatsAtCursor = this.docManager.getFormatAt(selection);
+      // getFormatAt now takes (index, length)
+      const formatsAtCursor = this.docManager.getFormatAt(selection.index, selection.length);
       this.docManager.setTypingAttributes(formatsAtCursor || {});
     } else {
+      // If there's a selection (length > 0) or no selection at all, clear typing attributes
       this.docManager.setTypingAttributes({});
     }
   }

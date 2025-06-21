@@ -1,10 +1,10 @@
 // src/DocumentManager.ts
-import Ritor from './Ritor';
-import { Document, Delta, Op, OpAttributes, ParagraphBreakMarker } from './Document';
+// import Ritor from './Ritor'; // Ritor import removed as it's not used
+import { Delta, Op, OpAttributes, ParagraphBreakMarker } from './Document';
 import { DocSelection } from './types';
 import { DeltaIterator } from './DeltaIterator';
 import * as OpUtils from './OpUtils';
-import { EventEmitter } from './EventEmitter';
+import EventEmitter from './EventEmitter'; // Default import
 
 const DEBUG = true;
 
@@ -70,7 +70,7 @@ export class DocumentManager extends EventEmitter {
         this.setSelectionToCursor = getSelectionOrSetSelection as ((sel: DocSelection) => void) || ((sel) => {
             log('setSelectionToCursor (default) called with:', sel);
         });
-    } else { // Assuming first arg is Ritor (though not used), second is initialContent
+    } else { // Assuming first arg might have been Ritor (now ignored), second is initialContent
         initialContent = initialContentOrGetSelection as Delta | undefined;
         this.getSelectionFromCursor = getSelectionOrSetSelection as (() => DocSelection) || (() => {
             log('getSelectionFromCursor (default) called'); return { index: 0, length: 0 };
@@ -81,17 +81,25 @@ export class DocumentManager extends EventEmitter {
     }
 
     log('Constructor: initialContent:', initialContent ? initialContent.ops : undefined);
-    this.currentDocument = initialContent || new Delta([{ insert: { paragraphBreak: true } as ParagraphBreakMarker }]);
+    const initialOps: Op[] = initialContent ? initialContent.ops : [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
+    this.currentDocument = new Delta(initialOps);
+
     if (this.currentDocument.ops.length === 0 || !OpUtils.isParagraphBreak(this.currentDocument.ops[this.currentDocument.ops.length -1])) {
         // Ensure document always ends with a PBM if not empty
-        this.currentDocument = this.currentDocument.insert({ paragraphBreak: true } as ParagraphBreakMarker);
+        // This logic might need to use compose or be reviewed if currentDocument.insert was a utility method
+        const opsToAddPBM: Op[] = [];
+        if (this.currentDocument.length() > 0) {
+            opsToAddPBM.push({ retain: this.currentDocument.length() });
+        }
+        opsToAddPBM.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
+        this.currentDocument = this.compose(this.currentDocument, new Delta(opsToAddPBM));
     }
     log('Constructor: currentDocument initialized:', this.currentDocument.ops);
   }
 
-  public emit(event: string, ...data: any[]): void {
-      super.emit(event, ...data);
-  }
+  // public emit(event: string, ...data: any[]): void { // Removed, inherited from EventEmitter
+  //     super.emit(event, ...data);
+  // }
 
   getDocument(): Delta {
     return this.currentDocument;
@@ -192,30 +200,37 @@ export class DocumentManager extends EventEmitter {
     const currentSelection = selection || this.getSelectionFromCursor();
     log('insertText: currentSelection', currentSelection);
     let currentIndex = currentSelection.index;
-    let lengthToDelete = currentSelection.length;
 
-    let finalChangeDelta = new Delta();
+    const ops: Op[] = [];
+
     if (currentIndex > 0) {
-        finalChangeDelta = finalChangeDelta.retain(currentIndex);
+        ops.push({ retain: currentIndex });
     }
 
     const attributesToApply = this.getCombinedAttributesForInsert(currentSelection);
     log('insertText: Attributes to apply for new text', attributesToApply);
 
-    if (currentSelection.length === 0) {
-        const opData = this._getOpAtIndex(this.currentDocument, currentIndex);
-        if (opData.op && OpUtils.isParagraphBreak(opData.op) && opData.opOffset === 0) {
-            log('insertText: Typing at a ParagraphBreakMarker. Deleting PBM.');
-            lengthToDelete = 1; // Delete the PBM
-        }
+    if (currentSelection.length > 0) {
+      ops.push({ delete: currentSelection.length });
+      ops.push({ insert: text, attributes: attributesToApply });
+    } else {
+      // Collapsed selection
+      const opDataAtCursor = this._getOpAtIndex(this.currentDocument, currentIndex);
+      const opAtCursor = opDataAtCursor.op;
+
+      if (opAtCursor && OpUtils.isParagraphBreak(opAtCursor) && opDataAtCursor.opOffset === 0) {
+        log('insertText: Typing at the start of a ParagraphBreakMarker. Deleting PBM, inserting text, then re-inserting PBM.');
+        ops.push({ delete: 1 }); // Delete the PBM
+        ops.push({ insert: text, attributes: attributesToApply });
+        // Re-insert a PBM with undefined attributes (or should inherit from previous line?)
+        // For now, new PBMs are clean.
+        ops.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker, attributes: undefined });
+      } else {
+        ops.push({ insert: text, attributes: attributesToApply });
+      }
     }
 
-    if (lengthToDelete > 0) {
-      finalChangeDelta = finalChangeDelta.delete(lengthToDelete);
-      log('insertText: Deleting selected/PBM text, intermediate change', finalChangeDelta.ops);
-    }
-
-    finalChangeDelta = finalChangeDelta.insert(text, attributesToApply);
+    const finalChangeDelta = new Delta(ops);
     log('insertText: finalChangeDelta BEFORE compose', finalChangeDelta.ops);
     log('insertText: currentDocument BEFORE compose', this.currentDocument.ops);
 
@@ -234,40 +249,50 @@ export class DocumentManager extends EventEmitter {
     log('Entering deleteText', { lengthOrDirection, selection });
     const currentSelection = selection || this.getSelectionFromCursor();
     log('deleteText: currentSelection', currentSelection);
-    let change = new Delta();
+    const changeOps: Op[] = [];
     let finalCursorIndex = currentSelection.index;
 
     if (currentSelection.length > 0) {
-        if (currentSelection.index > 0) change = change.retain(currentSelection.index);
-        change = change.delete(currentSelection.length);
+        if (currentSelection.index > 0) {
+            changeOps.push({ retain: currentSelection.index });
+        }
+        changeOps.push({ delete: currentSelection.length });
         finalCursorIndex = currentSelection.index;
     } else {
         if (lengthOrDirection === 'backward') {
             if (currentSelection.index === 0) { log('deleteText: At BoD. Exiting.'); return; }
-            change = change.retain(currentSelection.index - 1).delete(1);
+            if (currentSelection.index - 1 > 0) { // Retain up to char to be deleted
+                 changeOps.push({ retain: currentSelection.index - 1 });
+            }
+            changeOps.push({ delete: 1 });
             finalCursorIndex = currentSelection.index - 1;
         } else if (lengthOrDirection === 'forward') {
             const docLength = this.currentDocument.length();
             if (currentSelection.index === docLength) { log('deleteText: At EoD. Exiting.'); return; }
-            if (currentSelection.index > 0) change = change.retain(currentSelection.index);
-            change = change.delete(1);
+            if (currentSelection.index > 0) {
+                changeOps.push({ retain: currentSelection.index });
+            }
+            changeOps.push({ delete: 1 });
             finalCursorIndex = currentSelection.index;
         } else if (typeof lengthOrDirection === 'number' && lengthOrDirection > 0) {
             const docLength = this.currentDocument.length();
             const delLength = Math.min(lengthOrDirection, docLength - currentSelection.index);
             if (delLength <= 0) { log('deleteText: Calculated delLength <=0. Exiting.'); return; }
-            if (currentSelection.index > 0) change = change.retain(currentSelection.index);
-            change = change.delete(delLength);
+            if (currentSelection.index > 0) {
+                changeOps.push({ retain: currentSelection.index });
+            }
+            changeOps.push({ delete: delLength });
             finalCursorIndex = currentSelection.index;
         } else {
             log('deleteText: Invalid args. Exiting.'); return;
         }
     }
 
-    log('deleteText: changeDelta', change.ops);
+    const changeDelta = new Delta(changeOps);
+    log('deleteText: changeDelta ops', changeDelta.ops);
     log('deleteText: currentDocument BEFORE compose', this.currentDocument.ops);
 
-    let composedDoc = this.compose(this.currentDocument, change);
+    let composedDoc = this.compose(this.currentDocument, changeDelta);
     log('deleteText: currentDocument AFTER compose (intermediate)', composedDoc.ops);
 
     if (composedDoc.ops.length === 0) {
@@ -277,15 +302,19 @@ export class DocumentManager extends EventEmitter {
         const lastOp = composedDoc.ops[composedDoc.ops.length - 1];
         if (!OpUtils.isParagraphBreak(lastOp)) {
             log('deleteText: Document does not end with PBM. Appending one.');
-            const addPbmDelta = new Delta().retain(composedDoc.length()).insert({ paragraphBreak: true } as ParagraphBreakMarker, undefined);
-            composedDoc = this.compose(composedDoc, addPbmDelta);
+            const addPbmOps: Op[] = [];
+            if (composedDoc.length() > 0) {
+                addPbmOps.push({ retain: composedDoc.length()});
+            }
+            addPbmOps.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker, attributes: undefined });
+            composedDoc = this.compose(composedDoc, new Delta(addPbmOps));
         }
     }
 
     this.currentDocument = composedDoc;
     log('deleteText: currentDocument FINAL', this.currentDocument.ops);
 
-    this.emit('document:change', { change, newDocument: this.currentDocument });
+    this.emit('document:change', { change: changeDelta, newDocument: this.currentDocument });
     log('deleteText: Setting new cursor selection', { index: finalCursorIndex, length: 0 });
     this.setSelectionToCursor({ index: finalCursorIndex, length: 0 });
     log('Exiting deleteText');
@@ -295,25 +324,25 @@ export class DocumentManager extends EventEmitter {
     log('Entering insertBlockBreak', { selection });
     const currentSelection = selection || this.getSelectionFromCursor();
     log('insertBlockBreak: currentSelection', currentSelection);
-    let change = new Delta();
-    const PBMOp: Op = { insert: { paragraphBreak: true } as ParagraphBreakMarker };
+    const PBMOp: Op = { insert: { paragraphBreak: true } as ParagraphBreakMarker, attributes: undefined };
 
+    const ops: Op[] = [];
     if (currentSelection.index > 0) {
-        change = change.retain(currentSelection.index);
+        ops.push({ retain: currentSelection.index });
     }
     if (currentSelection.length > 0) {
-      change = change.delete(currentSelection.length);
+      ops.push({ delete: currentSelection.length });
     }
+    ops.push(PBMOp);
 
-    change = change.insert(PBMOp, undefined);
-
-    log('insertBlockBreak: changeDelta BEFORE compose', change.ops);
+    const changeDelta = new Delta(ops);
+    log('insertBlockBreak: changeDelta ops', changeDelta.ops);
     log('insertBlockBreak: currentDocument BEFORE compose', this.currentDocument.ops);
 
-    this.currentDocument = this.compose(this.currentDocument, change);
+    this.currentDocument = this.compose(this.currentDocument, changeDelta);
 
     log('insertBlockBreak: currentDocument AFTER compose', this.currentDocument.ops);
-    this.emit('document:change', { change, newDocument: this.currentDocument });
+    this.emit('document:change', { change: changeDelta, newDocument: this.currentDocument });
 
     this.typingAttributes = {};
     log('insertBlockBreak: Typing attributes reset.');
@@ -340,25 +369,26 @@ export class DocumentManager extends EventEmitter {
     const attributesToApply: OpAttributes = { [key]: (value === null || value === undefined) ? null : value };
     log('formatText: Attributes to apply for range', attributesToApply);
 
-    let change = new Delta();
+    const ops: Op[] = [];
     if (currentSelection.index > 0) {
-        change = change.retain(currentSelection.index);
+        ops.push({ retain: currentSelection.index });
     }
-    change = change.retain(currentSelection.length, attributesToApply);
+    ops.push({ retain: currentSelection.length, attributes: attributesToApply });
 
-    log('formatText: changeDelta BEFORE compose', change.ops);
+    const changeDelta = new Delta(ops);
+    log('formatText: changeDelta ops', changeDelta.ops);
     log('formatText: currentDocument BEFORE compose', this.currentDocument.ops);
 
-    this.currentDocument = this.compose(this.currentDocument, change);
+    this.currentDocument = this.compose(this.currentDocument, changeDelta);
 
     log('formatText: currentDocument AFTER compose', this.currentDocument.ops);
-    this.emit('document:change', { change, newDocument: this.currentDocument });
+    this.emit('document:change', { change: changeDelta, newDocument: this.currentDocument });
     log('formatText: Setting new cursor selection (no change)', currentSelection);
     this.setSelectionToCursor(currentSelection);
     log('Exiting formatText');
   }
 
-  public compose(deltaA: Delta, deltaB: Delta): Delta {
+  public compose(deltaA: Delta, deltaB: Delta): Delta { // Ensure this is defined only ONCE
     log('Compose: START', { deltaA: deltaA.ops, deltaB: deltaB.ops });
     const iterA = new DeltaIterator(deltaA.ops);
     const iterB = new DeltaIterator(deltaB.ops);
@@ -471,35 +501,15 @@ export class DocumentManager extends EventEmitter {
     return resultDelta;
   }
 
-  public getTypingAttributes(): OpAttributesType {
-    return { ...this.typingAttributes };
-  }
-
-  public setTypingAttributes(attrs: OpAttributesType): void {
-    log('Entering setTypingAttributes', { attrs });
-    this.typingAttributes = attrs ? { ...attrs } : {};
-    log('setTypingAttributes: typingAttributes changed', this.typingAttributes);
-    this.emit('typingattributes:change', this.getTypingAttributes());
-  }
-
-  public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
-    log('Entering toggleTypingAttribute', { formatKey, explicitValue });
-    const newAttrs = { ...this.typingAttributes };
-
-    if (explicitValue === null || explicitValue === false) {
-        newAttrs[formatKey] = null;
-    } else if (explicitValue === true) {
-        newAttrs[formatKey] = true;
-    } else {
-        if (newAttrs[formatKey] === true) {
-            newAttrs[formatKey] = null;
-        } else {
-            newAttrs[formatKey] = true;
-        }
-    }
-    this.typingAttributes = newAttrs;
-    log('toggleTypingAttribute: typingAttributes changed', this.typingAttributes);
-    this.emit('typingattributes:change', this.getTypingAttributes());
-  }
+  // Removed duplicate getTypingAttributes, setTypingAttributes, and toggleTypingAttribute
+  // The correct ones are:
+  // getTypingAttributes(): OpAttributes (already defined earlier)
+  // setTypingAttribute(key: string, value: any): void (already defined earlier)
+  // No direct toggleTypingAttribute was in the "good" list from the problem description,
+  // Ritor uses setTypingAttribute for toggling logic or DocumentManager could have a more specific one if needed.
+  // The earlier setTypingAttribute(key,value) is the one to keep.
 }
+// export default DocumentManager; // Default export is not standard for ES6 modules if this is the main export.
+// However, the original file had it. If this file is DocumentManager.ts and is imported as default, it should stay.
+// For now, I'll keep it as per the original file structure.
 export default DocumentManager;
