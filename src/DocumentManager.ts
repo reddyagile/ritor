@@ -299,6 +299,10 @@ class DocumentManager {
     const iterB = new DeltaIterator(deltaB.ops);
     const resultOps: Op[] = [];
 
+    function isParagraphBreakMarker(insertVal: any): insertVal is ParagraphBreakMarker {
+      return typeof insertVal === 'object' && insertVal !== null && insertVal.paragraphBreak === true;
+    }
+
     function areAttributesSemanticallyEqual(attrs1?: OpAttributesType, attrs2?: OpAttributesType): boolean {
       const normalize = (attrs?: OpAttributesType): OpAttributesType | undefined => {
         if (!attrs) return undefined;
@@ -345,22 +349,24 @@ class DocumentManager {
         lastOp.retain += newOp.retain;
       } else if (newOp.insert !== undefined && lastOp.insert !== undefined &&
                  areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
-          const newIsString = typeof newOp.insert === 'string';
-          const lastIsString = typeof lastOp.insert === 'string';
-          const isNewParaBreak = !newIsString;
-          const isLastParaBreak = !lastIsString;
 
-          if (isNewParaBreak || isLastParaBreak) {
-              resultOps.push(newOp);
+        const newIsPBM = isParagraphBreakMarker(newOp.insert);
+        const lastIsPBM = isParagraphBreakMarker(lastOp.insert);
+
+        if (newIsPBM || lastIsPBM) {
+          resultOps.push(newOp);
+        } else {
+          const newInsertStr = newOp.insert as string; // Both are strings if not PBM
+          const lastInsertStr = lastOp.insert as string;
+
+          if (newInsertStr === '\n' && !lastInsertStr.endsWith('\n')) {
+            resultOps.push(newOp);
+          } else if (lastInsertStr.endsWith('\n') && newInsertStr !== '\n' && newInsertStr !== "") {
+            resultOps.push(newOp);
           } else {
-              if (newOp.insert === '\n' && !lastOp.insert.endsWith('\n')) {
-                  resultOps.push(newOp);
-              } else if (lastOp.insert.endsWith('\n') && newOp.insert !== '\n' && newOp.insert !== "") {
-                  resultOps.push(newOp);
-              } else {
-                  lastOp.insert += newOp.insert;
-              }
+            (lastOp.insert as string) += newInsertStr;
           }
+        }
       } else {
         resultOps.push(newOp);
       }
@@ -473,18 +479,21 @@ class DocumentManager {
                    areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
             const currentIsString = typeof currentOp.insert === 'string';
             const lastMergedIsString = typeof lastMergedOp.insert === 'string';
-            const isNewParaBreak = !currentIsString;
-            const isLastParaBreak = !lastMergedIsString;
+            const currentIsPBM = isParagraphBreakMarker(currentOp.insert);
+            const lastMergedIsPBM = isParagraphBreakMarker(lastMergedOp.insert);
 
-            if (isNewParaBreak || isLastParaBreak) {
+            if (currentIsPBM || lastMergedIsPBM) {
                 mergedFinalOps.push(currentOp);
             } else { // Both are strings
-                if (currentOp.insert === '\n' && !lastMergedOp.insert.endsWith('\n')) {
+                const currentInsertStr = currentOp.insert as string;
+                const lastMergedInsertStr = lastMergedOp.insert as string;
+
+                if (currentInsertStr === '\n' && !lastMergedInsertStr.endsWith('\n')) {
                      mergedFinalOps.push(currentOp);
-                } else if (lastMergedOp.insert.endsWith('\n') && currentOp.insert !== '\n' && currentOp.insert !== "") {
+                } else if (lastMergedInsertStr.endsWith('\n') && currentInsertStr !== '\n' && currentInsertStr !== "") {
                      mergedFinalOps.push(currentOp);
                 } else {
-                    lastMergedOp.insert += currentOp.insert;
+                    (lastMergedOp.insert as string) += currentInsertStr;
                 }
             }
         } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
