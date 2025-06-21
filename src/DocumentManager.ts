@@ -1,153 +1,32 @@
 // src/DocumentManager.ts
-import Ritor from './Ritor'; // Still needed for this.ritor.emit()
-import { Document, Delta, Op, OpAttributes as OpAttributesType, ParagraphBreakMarker } from './Document'; // Ensure ParagraphBreakMarker is imported
-import { DocSelection } from './types'; // Import from types.ts
+import Ritor from './Ritor';
+import { Document, Delta, Op, OpAttributes, ParagraphBreakMarker } from './Document';
+import { DocSelection } from './types';
+import { DeltaIterator } from './DeltaIterator';
+import * as OpUtils from './OpUtils';
+import { EventEmitter } from './EventEmitter';
 
-// Helper classes OpUtils, DeltaIterator, OpAttributeComposer remain here for now,
-// as they are specific to Delta manipulation within DocumentManager.
-// These are assumed to be part of the same file scope for DocumentManager.
+const DEBUG = true;
 
-class OpUtils {
-  static getOpLength(op: Op): number {
-    if (typeof op.delete === 'number') return op.delete;
-    if (typeof op.retain === 'number') return op.retain;
-    if (typeof op.insert === 'string') {
-      return op.insert.length;
-    }
-    // Check if op.insert is our ParagraphBreakMarker object
-    if (typeof op.insert === 'object' && op.insert !== null && (op.insert as ParagraphBreakMarker).paragraphBreak === true) {
-      return 1; // ParagraphBreakMarker has a conceptual length of 1
-    }
-
-    if (op.insert === undefined && op.delete === undefined && op.retain === undefined) {
-        return 0;
-    }
-    return 0;
+function log(...args: any[]) {
+  if (DEBUG) {
+    // Add a timestamp to each log for better traceability
+    const now = new Date();
+    const timeString = `${now.getHours()}:${now.getMinutes()}:${now.getSeconds()}.${now.getMilliseconds()}`;
+    console.log(`[DM ${timeString}]`, ...args);
   }
 }
 
-class DeltaIterator {
-  ops: Op[];
-  index: number;
-  offset: number;
-
-  constructor(ops: Op[]) {
-    this.ops = ops;
-    this.index = 0;
-    this.offset = 0;
-  }
-
-  hasNext(): boolean {
-    if (this.index < this.ops.length) {
-      const currentOp = this.ops[this.index];
-      if (currentOp) {
-        const len = OpUtils.getOpLength(currentOp);
-        if (this.offset < len) {
-          return true;
-        }
-        return this.index < this.ops.length - 1;
-      }
-    }
-    return false;
-  }
-
-  peek(): Op | null {
-    if (!this.hasNext()) return null;
-
-    const currentOp = this.ops[this.index];
-    if (!currentOp) return null;
-
-    if (this.offset > 0) {
-      if (typeof currentOp.insert === 'string') {
-        return { insert: currentOp.insert.substring(this.offset), attributes: currentOp.attributes };
-      } else if (currentOp.insert && typeof currentOp.insert === 'object' && (currentOp.insert as ParagraphBreakMarker).paragraphBreak === true) {
-        return null;
-      } else if (currentOp.retain !== undefined) {
-        return { retain: currentOp.retain - this.offset, attributes: currentOp.attributes };
-      } else if (currentOp.delete !== undefined) {
-        return { delete: currentOp.delete - this.offset };
-      }
-      return null;
-    }
-    return currentOp;
-  }
-
-  peekType(): string | null {
-    const op = this.peek();
-    if (!op) return null;
-    if (op.hasOwnProperty('insert')) return 'insert';
-    if (op.hasOwnProperty('delete')) return 'delete';
-    if (op.hasOwnProperty('retain')) return 'retain';
-    return null;
-  }
-
-  next(length?: number): Op {
-    if (!this.hasNext()) return {};
-
-    const currentOp = this.ops[this.index];
-    if (!currentOp) {
-        this.index++;
-        return {};
-    }
-
-    const currentOpFullLength = OpUtils.getOpLength(currentOp);
-    const currentOpEffectiveRemainingLength = currentOpFullLength - this.offset;
-
-    let opToReturn: Op;
-    const consumeLength = length == null ? currentOpEffectiveRemainingLength : Math.min(length, currentOpEffectiveRemainingLength);
-
-    if (consumeLength < 0) { this.index++; this.offset = 0; return {}; }
-
-    if (consumeLength === 0) {
-        if (currentOpFullLength === 0 && this.offset === 0) {
-             opToReturn = { ...currentOp };
-             this.index++;
-             this.offset = 0;
-             return opToReturn;
-        }
-        return {};
-    }
-
-    if (typeof currentOp.insert === 'string') {
-      opToReturn = {
-        insert: currentOp.insert.substring(this.offset, this.offset + consumeLength),
-        attributes: currentOp.attributes
-      };
-    } else if (currentOp.insert && typeof currentOp.insert === 'object' && (currentOp.insert as ParagraphBreakMarker).paragraphBreak === true) {
-      opToReturn = {
-        insert: { paragraphBreak: true } as ParagraphBreakMarker,
-        attributes: currentOp.attributes
-      };
-    } else if (currentOp.retain !== undefined) {
-      opToReturn = {
-        retain: consumeLength,
-        attributes: currentOp.attributes
-      };
-    } else if (currentOp.delete !== undefined) {
-      opToReturn = { delete: consumeLength };
-    } else {
-      opToReturn = {};
-      console.warn("DeltaIterator: Unknown op type in next()", currentOp);
-    }
-
-    this.offset += consumeLength;
-    if (this.offset >= currentOpFullLength) {
-      this.index++;
-      this.offset = 0;
-    }
-    return opToReturn;
-  }
-}
-
+// OpAttributeComposer class as defined in previous steps
 class OpAttributeComposer {
-  static compose(a?: OpAttributesType, b?: OpAttributesType, keepNull: boolean = false): OpAttributesType | undefined {
+  static compose(a?: OpAttributes, b?: OpAttributes, keepNull: boolean = false): OpAttributes | undefined {
     if (typeof a !== 'object' && a !== undefined) a = {};
     if (typeof b !== 'object' && b !== undefined) b = {};
 
     a = a || {};
     b = b || {};
 
-    let attributes: OpAttributesType = { ...a };
+    let attributes: OpAttributes = { ...a };
     for (const key in b) {
       if (b.hasOwnProperty(key)) {
         attributes[key] = b[key];
@@ -164,19 +43,57 @@ class OpAttributeComposer {
   }
 }
 
-class DocumentManager {
-  public ritor: Ritor;
-  private currentDocument: Document;
-  public commandState: Map<string, boolean> = new Map();
-  private typingAttributes: OpAttributesType = {};
 
-  constructor(ritor: Ritor, initialDelta?: Delta) {
-    this.ritor = ritor;
-    const defaultInitialOps: Op[] = [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
-    this.currentDocument = new Document(initialDelta || new Delta(defaultInitialOps));
+export class DocumentManager extends EventEmitter {
+  public currentDocument: Delta;
+  private typingAttributes: OpAttributes = {};
+  private getSelectionFromCursor: () => DocSelection;
+  private setSelectionToCursor: (selection: DocSelection) => void;
+
+  constructor(
+    ritorOrInitialContent?: Ritor | Delta, // First arg can be Ritor or Delta for backward compatibility or testing
+    initialContentOrGetSelection?: Delta | (() => DocSelection),
+    getSelectionOrSetSelection?: (() => DocSelection) | ((sel: DocSelection) => void),
+    setSelection?: (sel: DocSelection) => void
+  ) {
+    super();
+
+    let initialContent: Delta | undefined;
+
+    // Adapt for Ritor instance if provided (though Ritor itself is not stored or used directly anymore beyond emit)
+    // For this refactor, we assume Ritor instance is not stored, and emit is via super()
+    if (ritorOrInitialContent instanceof Delta) {
+        initialContent = ritorOrInitialContent;
+        this.getSelectionFromCursor = initialContentOrGetSelection as (() => DocSelection) || (() => {
+            log('getSelectionFromCursor (default) called'); return { index: 0, length: 0 };
+        });
+        this.setSelectionToCursor = getSelectionOrSetSelection as ((sel: DocSelection) => void) || ((sel) => {
+            log('setSelectionToCursor (default) called with:', sel);
+        });
+    } else { // Assuming first arg is Ritor (though not used), second is initialContent
+        initialContent = initialContentOrGetSelection as Delta | undefined;
+        this.getSelectionFromCursor = getSelectionOrSetSelection as (() => DocSelection) || (() => {
+            log('getSelectionFromCursor (default) called'); return { index: 0, length: 0 };
+        });
+        this.setSelectionToCursor = setSelection || ((sel) => {
+            log('setSelectionToCursor (default) called with:', sel);
+        });
+    }
+
+    log('Constructor: initialContent:', initialContent ? initialContent.ops : undefined);
+    this.currentDocument = initialContent || new Delta([{ insert: { paragraphBreak: true } as ParagraphBreakMarker }]);
+    if (this.currentDocument.ops.length === 0 || !OpUtils.isParagraphBreak(this.currentDocument.ops[this.currentDocument.ops.length -1])) {
+        // Ensure document always ends with a PBM if not empty
+        this.currentDocument = this.currentDocument.insert({ paragraphBreak: true } as ParagraphBreakMarker);
+    }
+    log('Constructor: currentDocument initialized:', this.currentDocument.ops);
   }
 
-  public getDocument(): Document {
+  public emit(event: string, ...data: any[]): void {
+      super.emit(event, ...data);
+  }
+
+  getDocument(): Delta {
     return this.currentDocument;
   }
 
@@ -196,130 +113,253 @@ class DocumentManager {
     return { op: null, opIndex: -1, opOffset: 0, opAbsoluteIndex: -1 };
   }
 
-  public insertText(text: string, selection: DocSelection) {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    let newCursorIndex = selection.index;
-    let attributesForNewText: OpAttributesType | undefined = undefined;
+  getFormatAt(index: number, length: number = 0): OpAttributes {
+    log('Entering getFormatAt', { index, length });
+    const resultAttrs: OpAttributes = {};
+    if (!this.currentDocument) {
+      log('getFormatAt: No currentDocument, returning empty attrs');
+      return resultAttrs;
+    }
 
-    // lengthToDelete is now simply based on the original selection's length
-    const lengthToDelete = selection.length;
+    const iterator = new DeltaIterator(this.currentDocument.ops);
+    let currentPosition = 0;
+    const queryIndex = (length === 0 && index > 0) ? index -1 : index;
+    const queryLength = (length === 0) ? 1 : length;
+
+    while(iterator.hasNext()) {
+        const op = iterator.next();
+        if(!op || Object.keys(op).length === 0) break;
+
+        const opLength = OpUtils.getOpLength(op);
+        const opStart = currentPosition;
+        const opEnd = currentPosition + opLength;
+
+        const queryStart = queryIndex;
+        const queryEnd = queryIndex + queryLength;
+        const overlaps = Math.max(opStart, queryStart) < Math.min(opEnd, queryEnd);
+
+        if (overlaps && op.attributes) {
+            Object.assign(resultAttrs, op.attributes);
+        }
+        currentPosition += opLength;
+        if (currentPosition >= queryEnd) break;
+    }
+    log('Exiting getFormatAt', { resultAttrs });
+    return resultAttrs;
+  }
+
+  setTypingAttribute(key: string, value: any): void {
+    log('Entering setTypingAttribute', { key, value });
+    if (value === null || value === undefined) {
+      delete this.typingAttributes[key];
+    } else {
+      this.typingAttributes[key] = value;
+    }
+    log('setTypingAttribute: typingAttributes changed', this.typingAttributes);
+    this.emit('typingattributes:change', { ...this.typingAttributes });
+  }
+
+  getTypingAttributes(): OpAttributes {
+    return { ...this.typingAttributes };
+  }
+
+  private getCombinedAttributesForInsert(selection: DocSelection): OpAttributes | undefined {
+    log('Entering getCombinedAttributesForInsert', { selection });
+    let combinedAttributes: OpAttributes = {};
+    const formatAtCursor = this.getFormatAt(selection.index, 0);
+    log('getCombinedAttributesForInsert: formatAtCursor', formatAtCursor);
+    Object.assign(combinedAttributes, formatAtCursor);
 
     if (selection.length === 0) {
-      // Attribute inheritance logic remains
-      attributesForNewText = this.getFormatAt(selection);
-      const typingAttrs = this.getTypingAttributes();
-      attributesForNewText = OpAttributeComposer.compose(attributesForNewText, typingAttrs);
-
-      // REMOVED: The block that checked for PBM at selection.index and set lengthToDelete = 1
+        log('getCombinedAttributesForInsert: applying typingAttributes', this.typingAttributes);
+        const typingAttrs = this.getTypingAttributes(); // Use getter for clone
+        // This was using OpAttributeComposer.compose before, which is more robust
+        combinedAttributes = OpAttributeComposer.compose(combinedAttributes, typingAttrs) || {};
     }
 
-    if (selection.index > 0) {
-      ops.push({ retain: selection.index });
-    }
-
-    if (lengthToDelete > 0) { // This now only applies if original selection had length > 0
-      ops.push({ delete: lengthToDelete });
-    }
-
-    const insertOp: Op = { insert: text };
-    if (attributesForNewText) {
-      insertOp.attributes = attributesForNewText;
-    }
-    ops.push(insertOp);
-
-    newCursorIndex = selection.index + text.length;
-
-    const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + lengthToDelete;
-    if (docLength > originalSegmentEndIndex) {
-      ops.push({ retain: docLength - originalSegmentEndIndex });
-    }
-
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-
-    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
+    const finalAttrs = Object.keys(combinedAttributes).length > 0 ? combinedAttributes : undefined;
+    log('Exiting getCombinedAttributesForInsert', { finalAttrs });
+    return finalAttrs;
   }
 
-  public formatText(attributes: OpAttributesType, selection: DocSelection) {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    if (selection.index > 0) { ops.push({ retain: selection.index }); }
-    if (selection.length > 0) { ops.push({ retain: selection.length, attributes: attributes }); }
-    const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + selection.length;
-    if (docLength > originalSegmentEndIndex) {
-      ops.push({ retain: docLength - originalSegmentEndIndex });
+  insertText(text: string, selection?: DocSelection): void {
+    log('Entering insertText', { text, selection });
+    if (!text) {
+      log('insertText: No text to insert, exiting');
+      return;
     }
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-    const newSelection: DocSelection = { index: selection.index, length: selection.length };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
+
+    const currentSelection = selection || this.getSelectionFromCursor();
+    log('insertText: currentSelection', currentSelection);
+    let currentIndex = currentSelection.index;
+    let lengthToDelete = currentSelection.length;
+
+    let finalChangeDelta = new Delta();
+    if (currentIndex > 0) {
+        finalChangeDelta = finalChangeDelta.retain(currentIndex);
+    }
+
+    const attributesToApply = this.getCombinedAttributesForInsert(currentSelection);
+    log('insertText: Attributes to apply for new text', attributesToApply);
+
+    if (currentSelection.length === 0) {
+        const opData = this._getOpAtIndex(this.currentDocument, currentIndex);
+        if (opData.op && OpUtils.isParagraphBreak(opData.op) && opData.opOffset === 0) {
+            log('insertText: Typing at a ParagraphBreakMarker. Deleting PBM.');
+            lengthToDelete = 1; // Delete the PBM
+        }
+    }
+
+    if (lengthToDelete > 0) {
+      finalChangeDelta = finalChangeDelta.delete(lengthToDelete);
+      log('insertText: Deleting selected/PBM text, intermediate change', finalChangeDelta.ops);
+    }
+
+    finalChangeDelta = finalChangeDelta.insert(text, attributesToApply);
+    log('insertText: finalChangeDelta BEFORE compose', finalChangeDelta.ops);
+    log('insertText: currentDocument BEFORE compose', this.currentDocument.ops);
+
+    this.currentDocument = this.compose(this.currentDocument, finalChangeDelta);
+
+    log('insertText: currentDocument AFTER compose', this.currentDocument.ops);
+    this.emit('document:change', { change: finalChangeDelta, newDocument: this.currentDocument });
+
+    const newCursorIndex = currentIndex + text.length;
+    log('insertText: Setting new cursor selection', { index: newCursorIndex, length: 0 });
+    this.setSelectionToCursor({ index: newCursorIndex, length: 0 });
+    log('Exiting insertText');
   }
 
-  public deleteText(selection: DocSelection) {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    let newCursorIndex = selection.index;
-    if (selection.index > 0) { ops.push({ retain: selection.index }); }
-    if (selection.length > 0) { ops.push({ delete: selection.length }); }
-    const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + selection.length;
-    if (docLength > originalSegmentEndIndex) {
-      ops.push({ retain: docLength - originalSegmentEndIndex });
+  deleteText(lengthOrDirection: number | 'forward' | 'backward', selection?: DocSelection): void {
+    log('Entering deleteText', { lengthOrDirection, selection });
+    const currentSelection = selection || this.getSelectionFromCursor();
+    log('deleteText: currentSelection', currentSelection);
+    let change = new Delta();
+    let finalCursorIndex = currentSelection.index;
+
+    if (currentSelection.length > 0) {
+        if (currentSelection.index > 0) change = change.retain(currentSelection.index);
+        change = change.delete(currentSelection.length);
+        finalCursorIndex = currentSelection.index;
+    } else {
+        if (lengthOrDirection === 'backward') {
+            if (currentSelection.index === 0) { log('deleteText: At BoD. Exiting.'); return; }
+            change = change.retain(currentSelection.index - 1).delete(1);
+            finalCursorIndex = currentSelection.index - 1;
+        } else if (lengthOrDirection === 'forward') {
+            const docLength = this.currentDocument.length();
+            if (currentSelection.index === docLength) { log('deleteText: At EoD. Exiting.'); return; }
+            if (currentSelection.index > 0) change = change.retain(currentSelection.index);
+            change = change.delete(1);
+            finalCursorIndex = currentSelection.index;
+        } else if (typeof lengthOrDirection === 'number' && lengthOrDirection > 0) {
+            const docLength = this.currentDocument.length();
+            const delLength = Math.min(lengthOrDirection, docLength - currentSelection.index);
+            if (delLength <= 0) { log('deleteText: Calculated delLength <=0. Exiting.'); return; }
+            if (currentSelection.index > 0) change = change.retain(currentSelection.index);
+            change = change.delete(delLength);
+            finalCursorIndex = currentSelection.index;
+        } else {
+            log('deleteText: Invalid args. Exiting.'); return;
+        }
     }
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
+
+    log('deleteText: changeDelta', change.ops);
+    log('deleteText: currentDocument BEFORE compose', this.currentDocument.ops);
+
+    let composedDoc = this.compose(this.currentDocument, change);
+    log('deleteText: currentDocument AFTER compose (intermediate)', composedDoc.ops);
+
+    if (composedDoc.ops.length === 0) {
+        log('deleteText: Document became empty. Resetting to a single PBM.');
+        composedDoc = new Delta([{ insert: { paragraphBreak: true } as ParagraphBreakMarker }]);
+    } else {
+        const lastOp = composedDoc.ops[composedDoc.ops.length - 1];
+        if (!OpUtils.isParagraphBreak(lastOp)) {
+            log('deleteText: Document does not end with PBM. Appending one.');
+            const addPbmDelta = new Delta().retain(composedDoc.length()).insert({ paragraphBreak: true } as ParagraphBreakMarker, undefined);
+            composedDoc = this.compose(composedDoc, addPbmDelta);
+        }
+    }
+
+    this.currentDocument = composedDoc;
+    log('deleteText: currentDocument FINAL', this.currentDocument.ops);
+
+    this.emit('document:change', { change, newDocument: this.currentDocument });
+    log('deleteText: Setting new cursor selection', { index: finalCursorIndex, length: 0 });
+    this.setSelectionToCursor({ index: finalCursorIndex, length: 0 });
+    log('Exiting deleteText');
   }
 
-  public getFormatAt(selection: DocSelection): OpAttributesType {
-    const docDelta = this.currentDocument.getDelta();
-    if (!docDelta || !docDelta.ops) return {};
-    let index = selection.index;
-    if (selection.length === 0 && index > 0) {
-      index -= 1;
-    } else if (selection.length > 0) {
-    }
-    let currentPosition = 0;
-    for (const op of docDelta.ops) {
-      let opLength = OpUtils.getOpLength(op);
+  insertBlockBreak(selection?: DocSelection): void {
+    log('Entering insertBlockBreak', { selection });
+    const currentSelection = selection || this.getSelectionFromCursor();
+    log('insertBlockBreak: currentSelection', currentSelection);
+    let change = new Delta();
+    const PBMOp: Op = { insert: { paragraphBreak: true } as ParagraphBreakMarker };
 
-      if (index >= currentPosition && index < currentPosition + opLength) {
-        return op.attributes || {};
-      }
-      if (opLength > 0) currentPosition += opLength;
+    if (currentSelection.index > 0) {
+        change = change.retain(currentSelection.index);
     }
-    return {};
+    if (currentSelection.length > 0) {
+      change = change.delete(currentSelection.length);
+    }
+
+    change = change.insert(PBMOp, undefined);
+
+    log('insertBlockBreak: changeDelta BEFORE compose', change.ops);
+    log('insertBlockBreak: currentDocument BEFORE compose', this.currentDocument.ops);
+
+    this.currentDocument = this.compose(this.currentDocument, change);
+
+    log('insertBlockBreak: currentDocument AFTER compose', this.currentDocument.ops);
+    this.emit('document:change', { change, newDocument: this.currentDocument });
+
+    this.typingAttributes = {};
+    log('insertBlockBreak: Typing attributes reset.');
+    this.emit('typingattributes:change', { ...this.typingAttributes });
+
+    const newCursorIndex = currentSelection.index + 1;
+    log('insertBlockBreak: Setting new cursor selection', { index: newCursorIndex, length: 0 });
+    this.setSelectionToCursor({ index: newCursorIndex, length: 0 });
+    log('Exiting insertBlockBreak');
   }
 
-  public clearFormat(selection: DocSelection): void {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    if (selection.index > 0) { ops.push({ retain: selection.index }); }
-    if (selection.length > 0) {
-      const resetAttributes: OpAttributesType = { bold: null, italic: null, underline: null };
-      ops.push({ retain: selection.length, attributes: resetAttributes });
+  formatText(key: string, value: any, selection?: DocSelection): void {
+    log('Entering formatText', { key, value, selection });
+    const currentSelection = selection || this.getSelectionFromCursor();
+    log('formatText: currentSelection', currentSelection);
+
+    if (currentSelection.length === 0) {
+        log('formatText: Collapsed selection. Calling setTypingAttribute.');
+        this.setTypingAttribute(key, value);
+        log('Exiting formatText (after setTypingAttribute)');
+        return;
     }
-    const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + selection.length;
-    if (docLength > originalSegmentEndIndex) {
-      ops.push({ retain: docLength - originalSegmentEndIndex });
+
+    const attributesToApply: OpAttributes = { [key]: (value === null || value === undefined) ? null : value };
+    log('formatText: Attributes to apply for range', attributesToApply);
+
+    let change = new Delta();
+    if (currentSelection.index > 0) {
+        change = change.retain(currentSelection.index);
     }
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-    const newSelection: DocSelection = { index: selection.index, length: selection.length };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
+    change = change.retain(currentSelection.length, attributesToApply);
+
+    log('formatText: changeDelta BEFORE compose', change.ops);
+    log('formatText: currentDocument BEFORE compose', this.currentDocument.ops);
+
+    this.currentDocument = this.compose(this.currentDocument, change);
+
+    log('formatText: currentDocument AFTER compose', this.currentDocument.ops);
+    this.emit('document:change', { change, newDocument: this.currentDocument });
+    log('formatText: Setting new cursor selection (no change)', currentSelection);
+    this.setSelectionToCursor(currentSelection);
+    log('Exiting formatText');
   }
 
   public compose(deltaA: Delta, deltaB: Delta): Delta {
+    log('Compose: START', { deltaA: deltaA.ops, deltaB: deltaB.ops });
     const iterA = new DeltaIterator(deltaA.ops);
     const iterB = new DeltaIterator(deltaB.ops);
     const resultOps: Op[] = [];
@@ -328,238 +368,107 @@ class DocumentManager {
       return typeof insertVal === 'object' && insertVal !== null && insertVal.paragraphBreak === true;
     }
 
-    function areAttributesSemanticallyEqual(attrs1?: OpAttributesType, attrs2?: OpAttributesType): boolean {
-      const normalize = (attrs?: OpAttributesType): OpAttributesType | undefined => {
-        if (!attrs) return undefined;
-        const keys = Object.keys(attrs);
-        if (keys.length === 0) return undefined;
-        const normalized: OpAttributesType = {};
-        let effectiveKeys = 0;
-        for (const key of keys) {
-          if (attrs[key] !== undefined && attrs[key] !== null) {
-            normalized[key] = attrs[key];
-            effectiveKeys++;
-          }
-        }
-        return effectiveKeys > 0 ? normalized : undefined;
-      };
-      const normalizedAttrs1 = normalize(attrs1);
-      const normalizedAttrs2 = normalize(attrs2);
-      if (normalizedAttrs1 === undefined && normalizedAttrs2 === undefined) return true;
-      if (normalizedAttrs1 === undefined || normalizedAttrs2 === undefined) return false;
-      const keys1 = Object.keys(normalizedAttrs1);
-      const keys2 = Object.keys(normalizedAttrs2);
-      if (keys1.length !== keys2.length) return false;
-      for (const key of keys1) {
-        if (normalizedAttrs1[key] !== normalizedAttrs2[key]) return false;
-      }
-      return true;
+    function areAttributesSemanticallyEqual(attrs1?: OpAttributes, attrs2?: OpAttributes): boolean {
+        const normalize = (attrs?: OpAttributes): OpAttributes | undefined => {
+            if (!attrs) return undefined; const keys = Object.keys(attrs); if (keys.length === 0) return undefined;
+            const normalized: OpAttributes = {}; let effectiveKeys = 0;
+            for (const key of keys) { if (attrs[key] !== undefined && attrs[key] !== null) { normalized[key] = attrs[key]; effectiveKeys++; } }
+            return effectiveKeys > 0 ? normalized : undefined;
+        };
+        const normalizedAttrs1 = normalize(attrs1); const normalizedAttrs2 = normalize(attrs2);
+        if (normalizedAttrs1 === undefined && normalizedAttrs2 === undefined) return true;
+        if (normalizedAttrs1 === undefined || normalizedAttrs2 === undefined) return false;
+        const keys1 = Object.keys(normalizedAttrs1); const keys2 = Object.keys(normalizedAttrs2);
+        if (keys1.length !== keys2.length) return false;
+        for (const key of keys1) { if (normalizedAttrs1[key] !== normalizedAttrs2[key]) return false; }
+        return true;
     }
 
     const pushOp = (newOp: Op) => {
-      if ( (newOp.retain && newOp.retain <= 0 && !newOp.attributes) ||
-           (newOp.delete && newOp.delete <= 0) ||
-           (newOp.insert === "" && !newOp.attributes) ) {
-        return;
-      }
-
-      if (resultOps.length === 0) {
-        resultOps.push(newOp);
-        return;
-      }
-      const lastOp = resultOps[resultOps.length - 1];
-      if (newOp.delete && lastOp.delete) {
-        lastOp.delete += newOp.delete;
-      } else if (newOp.retain && lastOp.retain && areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
-        lastOp.retain += newOp.retain;
-      } else if (newOp.insert !== undefined && lastOp.insert !== undefined &&
-                 areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
-          const newIsString = typeof newOp.insert === 'string';
-          const lastIsString = typeof lastOp.insert === 'string';
-          const newIsPBM = isParagraphBreakMarker(newOp.insert);
-          const lastIsPBM = isParagraphBreakMarker(lastOp.insert);
-
-          if (newIsPBM || lastIsPBM) {
-              resultOps.push(newOp);
-          } else {
-              const newInsertStr = newOp.insert as string;
-              const lastInsertStr = lastOp.insert as string;
-              if (newInsertStr === '\n' && !lastInsertStr.endsWith('\n')) {
-                  resultOps.push(newOp);
-              } else if (lastInsertStr.endsWith('\n') && newInsertStr !== '\n' && newInsertStr !== "") {
-                  resultOps.push(newOp);
-              } else {
-                  (lastOp.insert as string) += newInsertStr;
-              }
-          }
-      } else {
-        resultOps.push(newOp);
-      }
+        if ((newOp.retain && newOp.retain <= 0 && !newOp.attributes) || (newOp.delete && newOp.delete <= 0) || (newOp.insert === "" && !newOp.attributes) ) return;
+        if (resultOps.length === 0) { resultOps.push(newOp); return; }
+        const lastOp = resultOps[resultOps.length - 1];
+        if (newOp.delete && lastOp.delete) { lastOp.delete += newOp.delete;}
+        else if (newOp.retain && lastOp.retain && areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) { lastOp.retain += newOp.retain; }
+        else if (newOp.insert !== undefined && lastOp.insert !== undefined && areAttributesSemanticallyEqual(newOp.attributes, lastOp.attributes)) {
+            const newIsString = typeof newOp.insert === 'string'; const lastIsString = typeof lastOp.insert === 'string';
+            const newIsPBM = isParagraphBreakMarker(newOp.insert); const lastIsPBM = isParagraphBreakMarker(lastOp.insert);
+            if (newIsPBM || lastIsPBM) { resultOps.push(newOp); }
+            else {
+                const newInsertStr = newOp.insert as string; const lastInsertStr = lastOp.insert as string;
+                if (newInsertStr === '\n' && !lastInsertStr.endsWith('\n')) { resultOps.push(newOp); }
+                else if (lastInsertStr.endsWith('\n') && newInsertStr !== '\n' && newInsertStr !== "") { resultOps.push(newOp); }
+                else { (lastOp.insert as string) += newInsertStr;}
+            }
+        } else { resultOps.push(newOp); }
     };
-
     while (iterA.hasNext() || iterB.hasNext()) {
-      const opA = iterA.peek();
-      const opB = iterB.peek();
-      const typeA = iterA.peekType();
-      const typeB = iterB.peekType();
-
-      if (typeB === 'insert') {
-        pushOp(iterB.next());
-      } else if (typeA === 'delete') {
-        pushOp(iterA.next());
-      } else if (typeB === 'delete') {
-        const bOpDelete = iterB.next();
-        if (bOpDelete && bOpDelete.delete) {
-            let length = bOpDelete.delete;
-            while (length > 0 && iterA.hasNext()) {
-                const nextA = iterA.peek();
-                if (!nextA) break;
-                const nextALength = OpUtils.getOpLength(nextA);
-                const consumeLength = Math.min(length, nextALength);
-                if (nextA.retain && consumeLength > 0) {
-                    iterA.next(consumeLength);
-                } else if (nextA.insert && consumeLength > 0) {
-                    iterA.next(consumeLength);
-                } else if (consumeLength === 0 && nextALength === 0) {
-                    iterA.next();
-                    continue;
-                } else {
-                    if(typeA === 'delete') {
-                        pushOp(iterA.next());
-                    } else {
-                        if (nextALength > 0) iterA.next(consumeLength); else iterA.next();
-                    }
+        const opA = iterA.peek(); const opB = iterB.peek();
+        const typeA = iterA.peekType(); const typeB = iterB.peekType();
+        if (typeB === 'insert') { pushOp(iterB.next()); }
+        else if (typeA === 'delete') { pushOp(iterA.next()); }
+        else if (typeB === 'delete') {
+            const bOpDelete = iterB.next();
+            if (bOpDelete && bOpDelete.delete) {
+                let length = bOpDelete.delete;
+                while (length > 0 && iterA.hasNext()) {
+                    const nextA = iterA.peek(); if (!nextA) break;
+                    const nextALength = OpUtils.getOpLength(nextA); const consumeLength = Math.min(length, nextALength);
+                    if ((nextA.retain || nextA.insert) && consumeLength > 0) { iterA.next(consumeLength); }
+                    else if (consumeLength === 0 && nextALength === 0) { iterA.next(); continue; }
+                    else { if(typeA === 'delete') { pushOp(iterA.next()); } else { if (nextALength > 0) iterA.next(consumeLength); else iterA.next();}}
+                    length -= consumeLength;
                 }
-                length -= consumeLength;
             }
         }
-      } else if (typeA === 'retain' && typeB === 'retain') {
-        if (!opA || !opB || typeof opA.retain !== 'number' || typeof opB.retain !== 'number') {
-          if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue;
+        else if (typeA === 'retain' && typeB === 'retain') {
+            if (!opA || !opB || typeof opA.retain !== 'number' || typeof opB.retain !== 'number') { if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue; }
+            const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
+            const length = Math.min(opA.retain, opB.retain);
+            if (length > 0) pushOp({ retain: length, attributes });
+            iterA.next(length); iterB.next(length);
         }
-        const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
-        const length = Math.min(opA.retain, opB.retain);
-        if (length > 0) pushOp({ retain: length, attributes });
-        iterA.next(length);
-        iterB.next(length);
-      } else if (typeA === 'insert' && typeB === 'retain') {
-        if (!opA || !opB || opA.insert === undefined || typeof opB.retain !== 'number') {
-            if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue;
+        else if (typeA === 'insert' && typeB === 'retain') {
+            if (!opA || !opB || opA.insert === undefined || typeof opB.retain !== 'number') { if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue; }
+            const newAttributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
+            const length = Math.min(OpUtils.getOpLength(opA), opB.retain);
+            if (length > 0) { const opAWithValue = iterA.next(length); if (opAWithValue && opAWithValue.insert !== undefined) pushOp({ insert: opAWithValue.insert, attributes: newAttributes });}
+            iterB.next(length);
         }
-
-        const currentAttributesA = opA.attributes;
-        const attributesToApplyB = opB.attributes;
-        const newAttributes = OpAttributeComposer.compose(currentAttributesA, attributesToApplyB, true);
-
-        const length = Math.min(OpUtils.getOpLength(opA), opB.retain);
-
-        if (length > 0) {
-          const opAWithValue = iterA.next(length);
-
-          if (opAWithValue && opAWithValue.insert !== undefined) {
-            pushOp({ insert: opAWithValue.insert, attributes: newAttributes });
-          }
-        }
-        iterB.next(length);
-      } else if (opA) {
-        pushOp(iterA.next());
-      } else if (opB) {
-        pushOp(iterB.next());
-      } else {
-        break;
-      }
+        else if (opA) { pushOp(iterA.next()); }
+        else if (opB) { pushOp(iterB.next()); }
+        else { break; }
     }
-
     const finalOpsProcessing: Op[] = [];
     resultOps.forEach(op => {
       let processedOp = { ...op };
-      if (processedOp.attributes) {
-        for (const key in processedOp.attributes) {
-          if (processedOp.attributes[key] === null) {
-            delete processedOp.attributes[key];
-          }
-        }
-        if (Object.keys(processedOp.attributes).length === 0) {
-          delete processedOp.attributes;
-        }
-      }
-      if (processedOp.delete && processedOp.delete <= 0) return;
-      if (processedOp.retain && processedOp.retain <= 0 && !processedOp.attributes) return;
-      if (processedOp.insert === "" && !processedOp.attributes) {
-        return;
-      }
-
+      if (processedOp.attributes) { for (const key in processedOp.attributes) { if (processedOp.attributes[key] === null) delete processedOp.attributes[key]; } if (Object.keys(processedOp.attributes).length === 0) delete processedOp.attributes; }
+      if (processedOp.delete && processedOp.delete <= 0) return; if (processedOp.retain && processedOp.retain <= 0 && !processedOp.attributes) return; if (processedOp.insert === "" && !processedOp.attributes) return;
       finalOpsProcessing.push(processedOp);
     });
-
     const mergedFinalOps: Op[] = [];
     if (finalOpsProcessing.length > 0) {
       mergedFinalOps.push({ ...finalOpsProcessing[0] });
       for (let i = 1; i < finalOpsProcessing.length; i++) {
-        const currentOp = { ...finalOpsProcessing[i] };
-        const lastMergedOp = mergedFinalOps[mergedFinalOps.length - 1];
-        if (currentOp.delete && lastMergedOp.delete) {
-          lastMergedOp.delete += currentOp.delete;
-        } else if (currentOp.insert !== undefined && lastMergedOp.insert !== undefined &&
-                   areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
-            const currentIsString = typeof currentOp.insert === 'string';
-            const lastMergedIsString = typeof lastMergedOp.insert === 'string';
-            const currentIsPBM = isParagraphBreakMarker(currentOp.insert); // Use local type guard
-            const lastMergedIsPBM = isParagraphBreakMarker(lastMergedOp.insert); // Use local type guard
-
-            if (currentIsPBM || lastMergedIsPBM) {
-                mergedFinalOps.push(currentOp);
-            } else { // Both are strings
-                const currentInsertStr = currentOp.insert as string;
-                const lastMergedInsertStr = lastMergedOp.insert as string;
-
-                if (currentInsertStr === '\n' && !lastMergedInsertStr.endsWith('\n')) {
-                     mergedFinalOps.push(currentOp);
-                } else if (lastMergedInsertStr.endsWith('\n') && currentInsertStr !== '\n' && currentInsertStr !== "") {
-                     mergedFinalOps.push(currentOp);
-                } else {
-                    (lastMergedOp.insert as string) += currentInsertStr;
-                }
+        const currentOp = { ...finalOpsProcessing[i] }; const lastMergedOp = mergedFinalOps[mergedFinalOps.length - 1];
+        if (currentOp.delete && lastMergedOp.delete) { lastMergedOp.delete += currentOp.delete;}
+        else if (currentOp.insert !== undefined && lastMergedOp.insert !== undefined && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
+            const currentIsString = typeof currentOp.insert === 'string'; const lastMergedIsString = typeof lastMergedOp.insert === 'string';
+            const currentIsPBM = isParagraphBreakMarker(currentOp.insert); const lastMergedIsPBM = isParagraphBreakMarker(lastMergedOp.insert);
+            if (currentIsPBM || lastMergedIsPBM) { mergedFinalOps.push(currentOp); }
+            else {
+                const currentInsertStr = currentOp.insert as string; const lastMergedInsertStr = lastMergedOp.insert as string;
+                if (currentInsertStr === '\n' && !lastMergedInsertStr.endsWith('\n')) { mergedFinalOps.push(currentOp); }
+                else if (lastMergedInsertStr.endsWith('\n') && currentInsertStr !== '\n' && currentInsertStr !== "") { mergedFinalOps.push(currentOp); }
+                else { (lastMergedOp.insert as string) += currentInsertStr;}
             }
-        } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) {
-          lastMergedOp.retain += currentOp.retain;
-        } else {
-          mergedFinalOps.push(currentOp);
-        }
+        } else if (currentOp.retain && lastMergedOp.retain && areAttributesSemanticallyEqual(currentOp.attributes, lastMergedOp.attributes)) { lastMergedOp.retain += currentOp.retain;}
+        else { mergedFinalOps.push(currentOp); }
       }
     }
-    return new Delta(mergedFinalOps);
-  }
-
-  public insertBlockBreak(selection: DocSelection): void {
-    const currentDoc = this.getDocument();
-    const ops: Op[] = [];
-    let newCursorIndex = selection.index;
-
-    if (selection.index > 0) {
-      ops.push({ retain: selection.index });
-    }
-
-    if (selection.length > 0) {
-      ops.push({ delete: selection.length });
-    }
-
-    ops.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
-
-    newCursorIndex = selection.index + 1;
-
-    const docLength = currentDoc.getDelta().length();
-    const originalSegmentEndIndex = selection.index + selection.length;
-    if (docLength > originalSegmentEndIndex) {
-      ops.push({ retain: docLength - originalSegmentEndIndex });
-    }
-
-    const change = new Delta(ops);
-    const composedDelta = this.compose(currentDoc.getDelta(), change);
-    this.currentDocument = new Document(composedDelta);
-
-    const newSelection: DocSelection = { index: newCursorIndex, length: 0 };
-    this.ritor.emit('document:change', this.currentDocument, newSelection);
+    const resultDelta = new Delta(mergedFinalOps);
+    log('Compose: END', { resultDelta: resultDelta.ops });
+    return resultDelta;
   }
 
   public getTypingAttributes(): OpAttributesType {
@@ -567,11 +476,14 @@ class DocumentManager {
   }
 
   public setTypingAttributes(attrs: OpAttributesType): void {
+    log('Entering setTypingAttributes', { attrs });
     this.typingAttributes = attrs ? { ...attrs } : {};
-    this.ritor.emit('typingattributes:change', this.getTypingAttributes());
+    log('setTypingAttributes: typingAttributes changed', this.typingAttributes);
+    this.emit('typingattributes:change', this.getTypingAttributes());
   }
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
+    log('Entering toggleTypingAttribute', { formatKey, explicitValue });
     const newAttrs = { ...this.typingAttributes };
 
     if (explicitValue === null || explicitValue === false) {
@@ -586,7 +498,8 @@ class DocumentManager {
         }
     }
     this.typingAttributes = newAttrs;
-    this.ritor.emit('typingattributes:change', this.getTypingAttributes());
+    log('toggleTypingAttribute: typingAttributes changed', this.typingAttributes);
+    this.emit('typingattributes:change', this.getTypingAttributes());
   }
 }
 export default DocumentManager;
