@@ -201,28 +201,24 @@ class DocumentManager {
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
     let attributesForNewText: OpAttributesType | undefined = undefined;
-    let lengthToDelete = selection.length;
+
+    // lengthToDelete is now simply based on the original selection's length
+    const lengthToDelete = selection.length;
 
     if (selection.length === 0) {
+      // Attribute inheritance logic remains
       attributesForNewText = this.getFormatAt(selection);
       const typingAttrs = this.getTypingAttributes();
       attributesForNewText = OpAttributeComposer.compose(attributesForNewText, typingAttrs);
 
-      const opData = this._getOpAtIndex(currentDoc.getDelta(), selection.index);
-      if (opData.op &&
-          opData.op.insert &&
-          typeof opData.op.insert === 'object' &&
-          (opData.op.insert as ParagraphBreakMarker).paragraphBreak === true &&
-          opData.opOffset === 0) {
-        lengthToDelete = 1;
-      }
+      // REMOVED: The block that checked for PBM at selection.index and set lengthToDelete = 1
     }
 
     if (selection.index > 0) {
       ops.push({ retain: selection.index });
     }
 
-    if (lengthToDelete > 0) {
+    if (lengthToDelete > 0) { // This now only applies if original selection had length > 0
       ops.push({ delete: lengthToDelete });
     }
 
