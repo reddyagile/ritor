@@ -115,10 +115,10 @@ export class Renderer {
     }
   }
 
-  public render(doc: Document): void {
+  public render(delta: Delta): void { // Changed 'doc: Document' to 'delta: Delta'
     this.$el.innerHTML = '';
     this.currentBlockElement = null;
-    this._doRender(doc.getDelta());
+    this._doRender(delta);  // Changed doc.getDelta() to delta
   }
 
   public static deltaToHtml(delta: Delta): string {

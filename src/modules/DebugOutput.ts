@@ -56,8 +56,9 @@ class DebugOutput {
   }
 
   private _attachListeners(): void {
-    this.ritor.on('document:change', (doc: Document, newSelection?: DocSelection) => {
-      this._collectAndRenderData('document:change', newSelection);
+    // Correcting the event listener signature to match Ritor's emission
+    this.ritor.on('document:change', (eventData: { newDocument: Delta, newSelection?: DocSelection }) => {
+      this._collectAndRenderData('document:change', eventData.newSelection);
     });
 
     this.ritor.on('cursor:change', () => {
@@ -167,8 +168,7 @@ ${JSON.stringify(data.domRangeToDocOutput, null, 2)}
 
     outputText += `Attributes at Selection (getFormatAt):
 ${JSON.stringify(data.attributesAtSelection, null, 2)}
-
-`; // Literal newline
+`; // Removed trailing newline inside backtick, if any, to test string literal theory.
 
     if (this.lastRenderedData !== outputText) {
         if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {

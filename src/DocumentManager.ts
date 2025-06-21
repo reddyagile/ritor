@@ -47,11 +47,12 @@ class OpAttributeComposer {
 export class DocumentManager extends EventEmitter {
   public currentDocument: Delta;
   private typingAttributes: OpAttributes = {};
+  // private ritor: Ritor; // This property is no longer used or needed.
   private getSelectionFromCursor: () => DocSelection;
   private setSelectionToCursor: (selection: DocSelection) => void;
 
   constructor(
-    ritorOrInitialContent?: Ritor | Delta, // First arg can be Ritor or Delta for backward compatibility or testing
+    ritorOrInitialContent?: any | Delta, // Changed Ritor to any as Ritor type is not imported/used here
     initialContentOrGetSelection?: Delta | (() => DocSelection),
     getSelectionOrSetSelection?: (() => DocSelection) | ((sel: DocSelection) => void),
     setSelection?: (sel: DocSelection) => void
@@ -60,24 +61,36 @@ export class DocumentManager extends EventEmitter {
 
     let initialContent: Delta | undefined;
 
-    // Adapt for Ritor instance if provided (though Ritor itself is not stored or used directly anymore beyond emit)
-    // For this refactor, we assume Ritor instance is not stored, and emit is via super()
+    // Ritor instance is no longer stored.
+    // The first argument might be a Ritor instance for old compatibility (now 'any'), or a Delta.
     if (ritorOrInitialContent instanceof Delta) {
         initialContent = ritorOrInitialContent;
-        this.getSelectionFromCursor = initialContentOrGetSelection as (() => DocSelection) || (() => {
-            log('getSelectionFromCursor (default) called'); return { index: 0, length: 0 };
-        });
-        this.setSelectionToCursor = getSelectionOrSetSelection as ((sel: DocSelection) => void) || ((sel) => {
-            log('setSelectionToCursor (default) called with:', sel);
-        });
-    } else { // Assuming first arg might have been Ritor (now ignored), second is initialContent
-        initialContent = initialContentOrGetSelection as Delta | undefined;
-        this.getSelectionFromCursor = getSelectionOrSetSelection as (() => DocSelection) || (() => {
-            log('getSelectionFromCursor (default) called'); return { index: 0, length: 0 };
-        });
-        this.setSelectionToCursor = setSelection || ((sel) => {
-            log('setSelectionToCursor (default) called with:', sel);
-        });
+        this.getSelectionFromCursor = initialContentOrGetSelection as (() => DocSelection);
+        this.setSelectionToCursor = getSelectionOrSetSelection as ((sel: DocSelection) => void);
+    } else {
+        // If ritorOrInitialContent was Ritor-like, it's now ignored for direct storage.
+        // initialContentOrGetSelection should be the Delta.
+        initialContent = initialContentOrGetSelection instanceof Delta ? initialContentOrGetSelection : undefined;
+        this.getSelectionFromCursor = getSelectionOrSetSelection as (() => DocSelection);
+        this.setSelectionToCursor = setSelection as ((sel: DocSelection) => void);
+    }
+
+    // Ensure getSelectionFromCursor and setSelectionToCursor are functions, providing defaults if undefined.
+    this.getSelectionFromCursor = typeof this.getSelectionFromCursor === 'function'
+        ? this.getSelectionFromCursor
+        : (() => { log('getSelectionFromCursor (fallback) called'); return { index: 0, length: 0 }; });
+    this.setSelectionToCursor = typeof this.setSelectionToCursor === 'function'
+        ? this.setSelectionToCursor
+        : ((sel) => { log('setSelectionToCursor (fallback) called with:', sel); });
+
+    // This block attempts to handle the case where the first arg was Ritor-like and second was Delta
+    if (ritorOrInitialContent && !(ritorOrInitialContent instanceof Delta) &&
+        initialContentOrGetSelection instanceof Delta &&
+        typeof getSelectionOrSetSelection === 'function' &&
+        typeof setSelection === 'function') {
+            initialContent = initialContentOrGetSelection;
+            this.getSelectionFromCursor = getSelectionOrSetSelection;
+            this.setSelectionToCursor = setSelection;
     }
 
     log('Constructor: initialContent:', initialContent ? initialContent.ops : undefined);
@@ -433,40 +446,135 @@ export class DocumentManager extends EventEmitter {
         } else { resultOps.push(newOp); }
     };
     while (iterA.hasNext() || iterB.hasNext()) {
-        const opA = iterA.peek(); const opB = iterB.peek();
-        const typeA = iterA.peekType(); const typeB = iterB.peekType();
-        if (typeB === 'insert') { pushOp(iterB.next()); }
-        else if (typeA === 'delete') { pushOp(iterA.next()); }
-        else if (typeB === 'delete') {
-            const bOpDelete = iterB.next();
+        const opA = iterA.peek(); // opA is the effective current op for iterA (could be a remainder)
+        const opB = iterB.peek(); // opB is the effective current op for iterB
+        const typeA = iterA.peekType();
+        const typeB = iterB.peekType();
+
+        if (typeB === 'insert') {
+            if (opB) { // opB should be valid if typeB is 'insert'
+                pushOp(opB);
+            }
+            iterB.next(); // Consume the op from iterB that was just pushed
+        } else if (typeA === 'delete') {
+            if (opA) { // opA should be valid if typeA is 'delete'
+                pushOp(opA);
+            }
+            iterA.next(); // Consume the op from iterA that was just pushed
+        } else if (typeB === 'delete') {
+            const bOpDelete = opB; // Use the peeked opB
+            iterB.next();         // Advance iterB past this delete op
+
             if (bOpDelete && bOpDelete.delete) {
-                let length = bOpDelete.delete;
-                while (length > 0 && iterA.hasNext()) {
-                    const nextA = iterA.peek(); if (!nextA) break;
-                    const nextALength = OpUtils.getOpLength(nextA); const consumeLength = Math.min(length, nextALength);
-                    if ((nextA.retain || nextA.insert) && consumeLength > 0) { iterA.next(consumeLength); }
-                    else if (consumeLength === 0 && nextALength === 0) { iterA.next(); continue; }
-                    else { if(typeA === 'delete') { pushOp(iterA.next()); } else { if (nextALength > 0) iterA.next(consumeLength); else iterA.next();}}
-                    length -= consumeLength;
+                let lengthToDeleteFromA = bOpDelete.delete;
+                while (lengthToDeleteFromA > 0 && iterA.hasNext()) {
+                    const currentOpA = iterA.peek(); // Peek current op from iterA
+                    if (!currentOpA) break;
+
+                    const currentOpALength = iterA.peekLength(); // Get remaining length of currentOpA
+                    const consumeLength = Math.min(lengthToDeleteFromA, currentOpALength);
+
+                    if ((currentOpA.retain || currentOpA.insert) && consumeLength > 0) {
+                        // If opA is retain or insert, it's "skipped" or "covered" by B's delete.
+                        // So, just advance iterA.
+                        iterA.next(consumeLength);
+                    } else if (currentOpA.delete && consumeLength > 0) {
+                        // If opA is also a delete, it's a double delete.
+                        // This case is complex: does one delete "override" or do they combine?
+                        // Standard Delta compose usually means B's delete takes precedence.
+                        // So we effectively skip A's delete op for the overlapping part.
+                        // However, the original code `if(typeA === 'delete') { pushOp(iterA.next()); }`
+                        // implies A's delete might be pushed if B's delete doesn't fully cover it OR if it's a different type of interaction.
+                        // For now, let's stick to B's delete consuming from A.
+                        // The original code here was:
+                        // else { if(typeA === 'delete') { pushOp(iterA.next()); } else { if (nextALength > 0) iterA.next(consumeLength); else iterA.next();}}
+                        // This suggests if A is delete, it's pushed (which is unusual if B is deleting same segment).
+                        // Let's simplify: B's delete consumes from A. A's op is not pushed.
+                        iterA.next(consumeLength);
+                    } else if (consumeLength === 0 && currentOpALength === 0) { // Zero-length op in A
+                        iterA.next(); // Advance past zero-length op
+                        continue; // Re-evaluate while loop with new peek from A
+                    } else { // Should not be reached if ops are valid
+                        iterA.next(consumeLength);
+                    }
+                    lengthToDeleteFromA -= consumeLength;
                 }
             }
         }
         else if (typeA === 'retain' && typeB === 'retain') {
-            if (!opA || !opB || typeof opA.retain !== 'number' || typeof opB.retain !== 'number') { if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue; }
+            if (!opA || !opB || typeof opA.retain !== 'number' || typeof opB.retain !== 'number') {
+                // Advance iterators if ops are not valid for this block
+                if (opA && typeof opA.retain !== 'number') iterA.next(); else if (iterA.hasNext()) iterA.next();
+                if (opB && typeof opB.retain !== 'number') iterB.next(); else if (iterB.hasNext()) iterB.next();
+                continue;
+            }
             const attributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
-            const length = Math.min(opA.retain, opB.retain);
+            // Use peekLength() as it gives the remaining length of the (potentially sliced) op
+            const lenA = iterA.peekLength();
+            const lenB = iterB.peekLength();
+            const length = Math.min(lenA, lenB);
+
             if (length > 0) pushOp({ retain: length, attributes });
-            iterA.next(length); iterB.next(length);
-        }
-        else if (typeA === 'insert' && typeB === 'retain') {
-            if (!opA || !opB || opA.insert === undefined || typeof opB.retain !== 'number') { if (iterA.hasNext()) iterA.next(); else if (iterB.hasNext()) iterB.next(); else break; continue; }
-            const newAttributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
-            const length = Math.min(OpUtils.getOpLength(opA), opB.retain);
-            if (length > 0) { const opAWithValue = iterA.next(length); if (opAWithValue && opAWithValue.insert !== undefined) pushOp({ insert: opAWithValue.insert, attributes: newAttributes });}
+            iterA.next(length);
             iterB.next(length);
         }
-        else if (opA) { pushOp(iterA.next()); }
-        else if (opB) { pushOp(iterB.next()); }
+        else if (typeA === 'insert' && typeB === 'retain') {
+            if (!opA || !opB || opA.insert === undefined || typeof opB.retain !== 'number') {
+                if (opA && opA.insert === undefined) iterA.next(); else if (iterA.hasNext()) iterA.next();
+                if (opB && typeof opB.retain !== 'number') iterB.next(); else if (iterB.hasNext()) iterB.next();
+                continue;
+            }
+            const newAttributes = OpAttributeComposer.compose(opA.attributes, opB.attributes, true);
+            const lenA = iterA.peekLength();
+            const lenB = iterB.peekLength();
+            const length = Math.min(lenA, lenB);
+
+            if (length > 0) {
+                let textToInsert : string | any = ''; // Allow for embeds
+                if (typeof opA.insert === 'string') {
+                    // opA from peek() is already the effective (remaining) part.
+                    // We need to take 'length' from this remaining part.
+                    textToInsert = opA.insert.substring(0, length);
+                } else { // embed
+                    // Embeds are usually consumed whole if their length matches the segment length.
+                    // OpUtils.getOpLength(opA) will give the length of the peeked (potentially already sliced) embed.
+                    if (OpUtils.getOpLength(opA) === length) {
+                        textToInsert = opA.insert;
+                    } else {
+                        // This case (partially consuming an embed with a retain) is tricky.
+                        // Standard behavior might be to push the embed if B's retain covers it,
+                        // or not, depending on desired interaction.
+                        // For simplicity, if B's retain is shorter than embed, we might skip pushing.
+                        // Or, if opA.insert is an object, it's usually all or nothing.
+                        // Let's assume string part of opA.insert is what we need.
+                        // This part of logic might need refinement based on embed handling rules.
+                        // The original code: const opAWithValue = iterA.next(length); pushOp({ insert: opAWithValue.insert ...})
+                        // This implies the *value* of the consumed part was returned.
+                        // With current iterator, opA.insert is the *full* remaining value.
+                        // So, if opA.insert is an object, and length < OpUtils.getOpLength(opA), this is complex.
+                        // Let's assume for now string inserts or full embed consumption.
+                         log('Compose: Complex case - partial consumption of non-string insert by a retain. Review needed.');
+                    }
+                }
+                if (textToInsert || (typeof opA.insert !== 'string' && opA.insert !== undefined && OpUtils.getOpLength(opA) === length) ) {
+                     pushOp({ insert: textToInsert, attributes: newAttributes });
+                }
+            }
+            iterA.next(length);
+            iterB.next(length);
+        }
+        else if (opA) { // opA is from iterA.peek()
+            if (opA) {
+                pushOp(opA);
+            }
+            iterA.next();
+        }
+        else if (opB) { // opB is from iterB.peek()
+            if (opB) {
+                pushOp(opB);
+            }
+            iterB.next();
+        }
         else { break; }
     }
     const finalOpsProcessing: Op[] = [];

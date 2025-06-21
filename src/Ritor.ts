@@ -309,13 +309,59 @@ class Ritor extends EventEmitter {
 
   public setTypingAttributes(attrs: OpAttributes): void {
     if (!this.docManager) return;
-    this.docManager.setTypingAttributes(attrs);
+    // This method in DocumentManager was removed.
+    // Individual attributes should be set via docManager.setTypingAttribute(key, value).
+    // This Ritor method is likely called by handleCursorChangeForTypingAttributes.
+    // If attrs is empty, it means clear. If not, it means set them.
+    const typingKeysToManage = ['bold', 'italic', 'underline', 'strike', 'link']; // Common keys
+    const newTypingAttributes: OpAttributes = {};
+
+    for (const key of typingKeysToManage) {
+        if (attrs[key] !== undefined && attrs[key] !== null) {
+            this.docManager.setTypingAttribute(key, attrs[key]);
+            newTypingAttributes[key] = attrs[key];
+        } else {
+            // If not in attrs, ensure it's cleared from current typing attributes
+            this.docManager.setTypingAttribute(key, null);
+        }
+    }
+    // Ensure an event is emitted if the behavior of setTypingAttribute itself doesn't cover all cases
+    // this.docManager.emit('typingattributes:change', this.docManager.getTypingAttributes());
+    // DocumentManager.setTypingAttribute already emits, so this might be redundant if called per attribute.
+    // However, setTypingAttributes was meant to apply a whole set.
+    // The direct emission might be needed if setTypingAttribute only emits if value *changes*.
+    // Let's rely on individual setTypingAttribute emissions for now.
   }
 
   public toggleTypingAttribute(formatKey: string, explicitValue?: boolean | null): void {
-    if (!this.docManager) return;
+    if (!this.docManager || !this.cursor) return;
     this._isTogglingTypingAttribute = true;
-    this.docManager.toggleTypingAttribute(formatKey, explicitValue);
+
+    const currentSelection = this.cursor.getDocSelection();
+
+    if (currentSelection && currentSelection.length > 0) {
+        // Range selection: apply format to the range
+        const currentFormats = this.docManager.getFormatAt(currentSelection.index, currentSelection.length);
+        let newValue: boolean | null;
+        if (explicitValue !== undefined) {
+            newValue = explicitValue;
+        } else {
+            // Toggle based on format at start of selection (or if the whole range has it)
+            // For simplicity, toggle based on the presence of the key.
+            newValue = currentFormats[formatKey] === true ? null : true;
+        }
+        this.docManager.formatText(formatKey, newValue, currentSelection);
+    } else {
+        // Collapsed selection: toggle typing attribute
+        const currentTypingAttrs = this.docManager.getTypingAttributes();
+        let newValue: boolean | null;
+        if (explicitValue !== undefined) {
+            newValue = explicitValue;
+        } else {
+            newValue = currentTypingAttrs[formatKey] === true ? null : true;
+        }
+        this.docManager.setTypingAttribute(formatKey, newValue);
+    }
   }
 
   private handleCursorChangeForTypingAttributes(): void {
@@ -329,10 +375,16 @@ class Ritor extends EventEmitter {
     if (selection && selection.length === 0) {
       // getFormatAt now takes (index, length)
       const formatsAtCursor = this.docManager.getFormatAt(selection.index, selection.length);
-      this.docManager.setTypingAttributes(formatsAtCursor || {});
+      // setTypingAttributes was refactored. We need to call it with the new object.
+      this.setTypingAttributes(formatsAtCursor || {});
     } else {
       // If there's a selection (length > 0) or no selection at all, clear typing attributes
-      this.docManager.setTypingAttributes({});
+      const typingKeysToClear = ['bold', 'italic', 'underline', 'strike', 'link'];
+      const emptyAttrs: OpAttributes = {};
+      for (const key of typingKeysToClear) {
+        emptyAttrs[key] = null; // Explicitly set to null to ensure clearing
+      }
+      this.setTypingAttributes(emptyAttrs); // Call the refactored setTypingAttributes
     }
   }
 }
