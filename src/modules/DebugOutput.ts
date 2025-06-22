@@ -151,10 +151,11 @@ ${JSON.stringify(data.docSelection, null, 2)}
 
 `; // Literal newline
 
-    outputText += `Current Typing Attributes:
-${JSON.stringify(data.typingAttributes, null, 2)}
+    // Simplifying this block to test for hidden issues or problems with its content
+    outputText += `Current Typing Attributes: ${JSON.stringify(data.typingAttributes, null, 2)}`;
+    // Ensure a newline is added if the original template had one that affects formatting:
+    outputText += "\n\n";
 
-`; // Literal newline
 
     outputText += `DOM Range:
 ${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}

@@ -47,57 +47,56 @@ class OpAttributeComposer {
 export class DocumentManager extends EventEmitter {
   public currentDocument: Delta;
   private typingAttributes: OpAttributes = {};
-  // private ritor: Ritor; // This property is no longer used or needed.
   private getSelectionFromCursor: () => DocSelection;
   private setSelectionToCursor: (selection: DocSelection) => void;
 
   constructor(
-    ritorOrInitialContent?: any | Delta, // Changed Ritor to any as Ritor type is not imported/used here
-    initialContentOrGetSelection?: Delta | (() => DocSelection),
-    getSelectionOrSetSelection?: (() => DocSelection) | ((sel: DocSelection) => void),
+    initialDelta?: Delta,
+    getSelection?: () => DocSelection,
     setSelection?: (sel: DocSelection) => void
   ) {
     super();
+    log('Constructor: initialDelta:', initialDelta, 'getSelection:', typeof getSelection, 'setSelection:', typeof setSelection);
 
-    let initialContent: Delta | undefined;
-
-    // Ritor instance is no longer stored.
-    // The first argument might be a Ritor instance for old compatibility (now 'any'), or a Delta.
-    if (ritorOrInitialContent instanceof Delta) {
-        initialContent = ritorOrInitialContent;
-        this.getSelectionFromCursor = initialContentOrGetSelection as (() => DocSelection);
-        this.setSelectionToCursor = getSelectionOrSetSelection as ((sel: DocSelection) => void);
+    // Assign currentDocument
+    if (initialDelta instanceof Delta) {
+      this.currentDocument = initialDelta;
     } else {
-        // If ritorOrInitialContent was Ritor-like, it's now ignored for direct storage.
-        // initialContentOrGetSelection should be the Delta.
-        initialContent = initialContentOrGetSelection instanceof Delta ? initialContentOrGetSelection : undefined;
-        this.getSelectionFromCursor = getSelectionOrSetSelection as (() => DocSelection);
-        this.setSelectionToCursor = setSelection as ((sel: DocSelection) => void);
+      // If initialDelta is undefined or not a Delta, use a default.
+      if (initialDelta !== undefined) {
+          log('Constructor: initialDelta was provided but not a Delta instance. Using default.');
+      }
+      this.currentDocument = new Delta([{ insert: { paragraphBreak: true } as ParagraphBreakMarker }]);
+    }
+    log('Constructor: currentDocument initialized:', this.currentDocument.ops);
+
+    // Assign getSelectionFromCursor
+    if (typeof getSelection === 'function') {
+      this.getSelectionFromCursor = getSelection;
+      log('Constructor: Assigned provided getSelection function.');
+    } else {
+      this.getSelectionFromCursor = () => {
+        log('getSelectionFromCursor (default) called');
+        return { index: 0, length: 0 };
+      };
+      log('Constructor: Assigned default getSelection function.');
     }
 
-    // Ensure getSelectionFromCursor and setSelectionToCursor are functions, providing defaults if undefined.
-    this.getSelectionFromCursor = typeof this.getSelectionFromCursor === 'function'
-        ? this.getSelectionFromCursor
-        : (() => { log('getSelectionFromCursor (fallback) called'); return { index: 0, length: 0 }; });
-    this.setSelectionToCursor = typeof this.setSelectionToCursor === 'function'
-        ? this.setSelectionToCursor
-        : ((sel) => { log('setSelectionToCursor (fallback) called with:', sel); });
-
-    // This block attempts to handle the case where the first arg was Ritor-like and second was Delta
-    if (ritorOrInitialContent && !(ritorOrInitialContent instanceof Delta) &&
-        initialContentOrGetSelection instanceof Delta &&
-        typeof getSelectionOrSetSelection === 'function' &&
-        typeof setSelection === 'function') {
-            initialContent = initialContentOrGetSelection;
-            this.getSelectionFromCursor = getSelectionOrSetSelection;
-            this.setSelectionToCursor = setSelection;
+    // Assign setSelectionToCursor
+    if (typeof setSelection === 'function') {
+      this.setSelectionToCursor = setSelection;
+      log('Constructor: Assigned provided setSelection function.');
+    } else {
+      this.setSelectionToCursor = (sel: DocSelection) => {
+        log('setSelectionToCursor (default) called with:', sel);
+        // Default does nothing.
+      };
+      log('Constructor: Assigned default setSelection function.');
     }
 
-    log('Constructor: initialContent:', initialContent ? initialContent.ops : undefined);
-    const initialOps: Op[] = initialContent ? initialContent.ops : [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
-    this.currentDocument = new Delta(initialOps);
-
-    if (this.currentDocument.ops.length === 0 || !OpUtils.isParagraphBreak(this.currentDocument.ops[this.currentDocument.ops.length -1])) {
+    // Ensure document always ends with a PBM if not empty, or if it's an empty delta from initial content
+    if (this.currentDocument.ops.length === 0 ||
+        !OpUtils.isParagraphBreak(this.currentDocument.ops[this.currentDocument.ops.length - 1])) {
         // Ensure document always ends with a PBM if not empty
         // This logic might need to use compose or be reviewed if currentDocument.insert was a utility method
         const opsToAddPBM: Op[] = [];
