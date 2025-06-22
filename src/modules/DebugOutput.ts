@@ -133,57 +133,46 @@ class DebugOutput {
   private _renderDebugInfo(data: DebugData): void {
     if (!this.$outputEl) return;
 
-    // Build the outputText string. Actual newline characters ('
-') are used for formatting.
+    // AGGRESSIVELY SIMPLIFIED OUTPUT FOR DIAGNOSIS
+    // Commenting out the original complex string construction:
+    /*
     let outputText = `Timestamp: ${data.timestamp}
-`; // Literal newline
+`;
     outputText += `Event Source: ${data.eventSource}
 
-`; // Literal newline
-
+`;
     outputText += `Document Delta:
 ${JSON.stringify(data.delta, null, 2)}
 
-`; // Literal newline
-
+`;
     outputText += `Model DocSelection:
 ${JSON.stringify(data.docSelection, null, 2)}
 
-`; // Literal newline
-
-    // Simplifying this block to test for hidden issues or problems with its content
+`;
     outputText += `Current Typing Attributes: ${JSON.stringify(data.typingAttributes, null, 2)}`;
-    // Ensure a newline is added if the original template had one that affects formatting:
     outputText += "\n\n";
-
-
     outputText += `DOM Range:
 ${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}
 
-`; // Literal newline
-
+`;
     outputText += `Output of domRangeToDocSelection(currentDomRange):
 ${JSON.stringify(data.domRangeToDocOutput, null, 2)}
 
-`; // Literal newline
-
+`;
     outputText += `Attributes at Selection (getFormatAt):
 ${JSON.stringify(data.attributesAtSelection, null, 2)}
-`; // Removed trailing newline inside backtick, if any, to test string literal theory.
+`;
+    */
+
+    // Replace with a very simple, single-line, hardcoded string.
+    const outputText = '<h1>Debug Output Placeholder</h1><p>Timestamp: ' + data.timestamp + '</p><p>Event: ' + data.eventSource + '</p>';
 
     if (this.lastRenderedData !== outputText) {
         if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
-            // For PRE/TEXTAREA, textContent handles newlines correctly.
-            this.$outputEl.textContent = outputText;
+            this.$outputEl.textContent = outputText; // textContent is fine for simple HTML if not PRE/TEXTAREA
         } else {
-            // For other elements, wrap in <pre>.
-            // First, escape HTML special characters from the entire outputText.
-            const htmlEscapedOutputText = outputText
-                .replace(/&/g, '&amp;') // Must be first
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-            // Then, replace actual newline characters (\n) in this escaped string with <br> tags for HTML rendering.
-            this.$outputEl.innerHTML = `<pre>${htmlEscapedOutputText.replace(/\n/g, '<br>')}</pre>`;
+            // For general elements, innerHTML is appropriate for HTML string.
+            this.$outputEl.innerHTML = outputText;
         }
         this.lastRenderedData = outputText;
     }

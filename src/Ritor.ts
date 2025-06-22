@@ -38,7 +38,24 @@ class Ritor extends EventEmitter {
     this.initializeDefaultModules();
 
     this.cursor = new Cursor(this);
-    this.docManager = new DocumentManager(this);
+
+    // Prepare arguments for DocumentManager constructor
+    let initialDeltaForDocManager: Delta | undefined = undefined;
+    if (this.options.initialContent instanceof Delta) {
+        initialDeltaForDocManager = this.options.initialContent;
+    } else if (this.options.initialContent) {
+        // If initialContent exists but is not a Delta, log a warning.
+        // Future enhancement could parse HTML/string to Delta here.
+        console.warn("Ritor constructor: options.initialContent was provided but is not a Delta instance. Defaulting to an empty document for DocumentManager.");
+        // initialDeltaForDocManager remains undefined, DocumentManager will use its default.
+    }
+
+    this.docManager = new DocumentManager(
+      initialDeltaForDocManager,
+      () => this.cursor.getDocSelection(),
+      (sel: DocSelection) => this.cursor.setDocSelection(sel)
+    );
+
     this.renderer = new Renderer(this.$el);
 
     this.initializeModules();
