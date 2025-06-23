@@ -41,18 +41,38 @@ class Ritor extends EventEmitter {
 
     // Prepare arguments for DocumentManager constructor
     let initialDeltaForDocManager: Delta | undefined = undefined;
-    if (this.options.initialContent instanceof Delta) {
-        initialDeltaForDocManager = this.options.initialContent;
-    } else if (this.options.initialContent) {
-        // If initialContent exists but is not a Delta, log a warning.
-        // Future enhancement could parse HTML/string to Delta here.
-        console.warn("Ritor constructor: options.initialContent was provided but is not a Delta instance. Defaulting to an empty document for DocumentManager.");
-        // initialDeltaForDocManager remains undefined, DocumentManager will use its default.
+    // RitorOptions has initialValue: string | undefined.
+    // DocumentManager expects Delta | undefined for its first argument.
+    if (typeof this.options.initialValue === 'string' && this.options.initialValue.length > 0) {
+        // TODO: Implement HTML string to Delta conversion here for Ritor.
+        // For now, DocumentManager will start with a default empty document if a string is provided.
+        console.warn(
+            "Ritor constructor: this.options.initialValue is a string. " +
+            "HTML-to-Delta parsing is not yet implemented. " +
+            "Ritor will start with an empty document."
+        );
+        // initialDeltaForDocManager remains undefined, so DocumentManager creates a default document.
+    } else if (this.options.initialValue === undefined || this.options.initialValue === '') {
+        // initialValue is undefined or an empty string, so DocumentManager will start with a default empty document.
+        console.log('Ritor constructor: initialValue is undefined or empty. DocumentManager will start with default content.');
+        // initialDeltaForDocManager remains undefined.
     }
+    // Note: The case where RitorOptions.initialValue could be a Delta instance is removed,
+    // as RitorOptions strictly defines initialValue as string | undefined.
+    // If RitorOptions were to allow initialValue: string | Delta | undefined, then:
+    // else if (this.options.initialValue instanceof Delta) {
+    //   initialDeltaForDocManager = this.options.initialValue;
+    // }
+
 
     this.docManager = new DocumentManager(
       initialDeltaForDocManager,
-      () => this.cursor.getDocSelection(),
+      () => {
+        const selection = this.cursor.getDocSelection();
+        // If selection is null (e.g., editor not focused, or no valid selection),
+        // return a default selection object as DocumentManager expects a DocSelection.
+        return selection === null ? { index: 0, length: 0 } : selection;
+      },
       (sel: DocSelection) => this.cursor.setDocSelection(sel)
     );
 

@@ -130,52 +130,16 @@ class DebugOutput {
     this._renderDebugInfo(debugData);
   }
 
-  private _renderDebugInfo(data: DebugData): void {
+  private _renderDebugInfo(data: DebugData): void { // data parameter is kept for signature consistency, but not used in this minimal version
     if (!this.$outputEl) return;
 
-    // AGGRESSIVELY SIMPLIFIED OUTPUT FOR DIAGNOSIS
-    // Commenting out the original complex string construction:
-    /*
-    let outputText = `Timestamp: ${data.timestamp}
-`;
-    outputText += `Event Source: ${data.eventSource}
+    // Replace the entire body with a minimal hardcoded assignment.
+    // Using textContent as it's safer and the original code used it for PRE/TEXTAREA.
+    // If the output element is not PRE/TEXTAREA, this will just show plain text.
+    this.$outputEl.textContent = 'Debug output is currently hardcoded for testing.';
 
-`;
-    outputText += `Document Delta:
-${JSON.stringify(data.delta, null, 2)}
-
-`;
-    outputText += `Model DocSelection:
-${JSON.stringify(data.docSelection, null, 2)}
-
-`;
-    outputText += `Current Typing Attributes: ${JSON.stringify(data.typingAttributes, null, 2)}`;
-    outputText += "\n\n";
-    outputText += `DOM Range:
-${data.domRange ? JSON.stringify(data.domRange, null, 2) : 'null'}
-
-`;
-    outputText += `Output of domRangeToDocSelection(currentDomRange):
-${JSON.stringify(data.domRangeToDocOutput, null, 2)}
-
-`;
-    outputText += `Attributes at Selection (getFormatAt):
-${JSON.stringify(data.attributesAtSelection, null, 2)}
-`;
-    */
-
-    // Replace with a very simple, single-line, hardcoded string.
-    const outputText = '<h1>Debug Output Placeholder</h1><p>Timestamp: ' + data.timestamp + '</p><p>Event: ' + data.eventSource + '</p>';
-
-    if (this.lastRenderedData !== outputText) {
-        if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
-            this.$outputEl.textContent = outputText; // textContent is fine for simple HTML if not PRE/TEXTAREA
-        } else {
-            // For general elements, innerHTML is appropriate for HTML string.
-            this.$outputEl.innerHTML = outputText;
-        }
-        this.lastRenderedData = outputText;
-    }
+    // The lastRenderedData logic is removed for this minimal version to simplify further.
+    // If this fixes the error, lastRenderedData logic can be added back with the placeholder.
   }
 }
 
