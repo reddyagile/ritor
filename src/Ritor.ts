@@ -7,7 +7,7 @@ import { Renderer } from './Renderer';
 import { isObject } from './utils';
 import { Delta, OpAttributes } from './Document'; // Import Delta instead of Document
 import Cursor from './Cursor'; // Import Cursor
-import DocumentManager from './DocumentManager'; // DocumentManager still needed
+import { DocumentManager } from './DocumentManager'; // Changed to named import
 
 class Ritor extends EventEmitter {
   private static modules = new Map();

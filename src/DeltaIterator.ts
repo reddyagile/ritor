@@ -4,7 +4,7 @@ import * as OpUtils from './OpUtils';
 export class DeltaIterator {
   private ops: Op[];
   private currentIndex: number = 0;
-  private currentOffset: number = 0; // Tracks how much of ops[currentIndex] has been consumed
+  public currentOffset: number = 0; // Changed from private to public
 
   constructor(ops: Op[]) {
     this.ops = ops || []; // Ensure ops is an array, even if null/undefined is passed
