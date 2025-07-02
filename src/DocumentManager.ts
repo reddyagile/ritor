@@ -12,33 +12,8 @@ function log(...args: any[]) {
   }
 }
 
-// OpAttributeComposer class IS USED by the getCombinedAttributesForInsert method from subtask 17.
-// The prompt for THIS subtask (22) provides a NEW getCombinedAttributesForInsert that does NOT use it.
-// Therefore, OpAttributeComposer can be removed if no other method uses it.
-// For now, I will keep it, assuming it might be used by other parts not in this diff.
-// If it causes an "unused" error later, it can be removed then.
-class OpAttributeComposer {
-  static compose(a?: OpAttributes, b?: OpAttributes, keepNull: boolean = false): OpAttributes | undefined {
-    if (typeof a !== 'object' && a !== undefined) a = {};
-    if (typeof b !== 'object' && b !== undefined) b = {};
-    a = a || {};
-    b = b || {};
-    let attributes: OpAttributes = { ...a };
-    for (const key in b) {
-      if (b.hasOwnProperty(key)) {
-        attributes[key] = b[key];
-      }
-    }
-    if (!keepNull) {
-      for (const key in attributes) {
-        if (attributes.hasOwnProperty(key) && attributes[key] === null) {
-          delete attributes[key];
-        }
-      }
-    }
-    return Object.keys(attributes).length > 0 ? attributes : undefined;
-  }
-}
+// OpAttributeComposer is not used by the new getCombinedAttributesForInsert or new compose
+// class OpAttributeComposer { ... }
 
 
 export class DocumentManager extends EventEmitter {
@@ -71,9 +46,9 @@ export class DocumentManager extends EventEmitter {
             opsToAddPBM.push({ retain: this.currentDocument.length() });
         }
         opsToAddPBM.push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
-        if (this.currentDocument.ops.length === 0) { // If original was truly empty
-            this.currentDocument = new Delta(opsToAddPBM.filter(op => op.insert)); // Keep only the insert PBM
-        } else { // If it had content but no trailing PBM
+        if (this.currentDocument.ops.length === 0) {
+            this.currentDocument = new Delta(opsToAddPBM.filter(op => op.insert));
+        } else {
              this.currentDocument = this.currentDocument.concat(new Delta(opsToAddPBM));
         }
     }
@@ -108,8 +83,8 @@ export class DocumentManager extends EventEmitter {
 
   public compose(deltaA: Delta, deltaB: Delta): Delta {
     log('Compose: START', { deltaA: deltaA.ops, deltaB: deltaB.ops });
-    const itA = new DeltaIterator(deltaA.ops);
-    const itB = new DeltaIterator(deltaB.ops);
+    const itA = new DeltaIterator(deltaA.ops); // itA, not iterA
+    const itB = new DeltaIterator(deltaB.ops); // itB, not iterB
     const newOps: Op[] = [];
 
     const pushOp = (op: Op) => {
@@ -169,11 +144,12 @@ export class DocumentManager extends EventEmitter {
             }
             itA.next();
         } else if (opA && opB) {
-            const lenA = itA.peekLength();
-            const lenB = itB.peekLength();
+            const lenA = itA.peekLength(); // Current remaining length of opA
+            const lenB = itB.peekLength(); // Current remaining length of opB
+            // const length = Math.min(lenA, lenB); // This was defined in the prompt's replacement block, defined later here as needed
 
             if (typeA === 'retain' && typeB === 'retain') {
-                const length = Math.min(lenA, lenB);
+                const length = Math.min(lenA, lenB); // Specific to this block
                 const attributes = OpUtils.composeAttributes(opA.attributes, opB.attributes); // Removed 3rd arg
                 const opToPush: Op = { retain: length };
                 if (attributes && Object.keys(attributes).length > 0) opToPush.attributes = attributes;
@@ -181,46 +157,55 @@ export class DocumentManager extends EventEmitter {
                 itA.next(length);
                 itB.next(length);
             } else if (typeA === 'insert' && typeB === 'retain') {
-                const length = Math.min(lenA, lenB);
-                const attributes = OpUtils.composeAttributes(opA.attributes, opB.attributes); // Removed 3rd arg
+                // ---- Start of replacement block from prompt ----
+                const opA_attributes = opA ? opA.attributes : undefined;
+                const opB_attributes = opB ? opB.attributes : undefined;
+                const attributes = OpUtils.composeAttributes(opA_attributes, opB_attributes);
 
-                let currentInsertValue: string | ParagraphBreakMarker | Record<string, any> | undefined = undefined;
+                const current_lenA = opA ? itA.peekLength() : 0;
+                const current_lenB = opB ? itB.peekLength() : 0;
+                const length = Math.min(current_lenA, current_lenB);
+
+                let opToPush: Op | null = null;
 
                 if (opA && opA.insert !== undefined) {
                     if (typeof opA.insert === 'string') {
-                        const insertSegment = opA.insert.substring(itA.currentOffset, itA.currentOffset + length);
-                        if (insertSegment.length > 0) {
-                            currentInsertValue = insertSegment;
+                        const segment = opA.insert.substring(itA.currentOffset, itA.currentOffset + length);
+                        if (segment.length > 0) {
+                            opToPush = { insert: segment, attributes: attributes };
                         } else if (length > 0 && attributes && Object.keys(attributes).length > 0) {
-                            currentInsertValue = undefined;
-                        } else {
-                            currentInsertValue = undefined;
+                            opToPush = { retain: length, attributes: attributes };
                         }
                     } else {
-                        if (length === 1 && itA.peekLength() === 1) {
+                        if (length === 1) {
                             if (OpUtils.isParagraphBreak(opA)) {
-                                currentInsertValue = { paragraphBreak: true } as ParagraphBreakMarker;
+                                const pbmInsert: ParagraphBreakMarker = { paragraphBreak: true };
+                                opToPush = { insert: pbmInsert, attributes: attributes };
                             } else {
-                                currentInsertValue = { ...(opA.insert as Record<string, any>) };
+                                const embedInsert: Record<string, any> = { ...(opA.insert as Record<string, any>) };
+                                opToPush = { insert: embedInsert, attributes: attributes };
                             }
                         } else {
-                            currentInsertValue = undefined;
-                            log('Compose: Object insert from deltaA cannot be segmented to current processing length.', {opA_insert: opA.insert, length});
+                            log('Compose: Object insert from deltaA cannot be segmented for current processing length.', { insert: opA.insert, length });
+                            if (length > 0 && attributes && Object.keys(attributes).length > 0) {
+                                opToPush = { retain: length, attributes: attributes };
+                            }
                         }
                     }
-                }
-
-                if (currentInsertValue !== undefined) {
-                    if (typeof currentInsertValue === 'string' && currentInsertValue.length === 0 && (!attributes || Object.keys(attributes).length === 0)) {
-                        // Do not push {insert: ""}
-                    } else {
-                        pushOp({ insert: currentInsertValue, attributes: attributes });
+                } else if (opA === null && opB && typeB === 'retain') {
+                    if (length > 0 ) {
+                         opToPush = { retain: length, attributes: attributes };
                     }
                 } else if (length > 0 && attributes && Object.keys(attributes).length > 0) {
-                    pushOp({ retain: length, attributes: attributes });
+                    opToPush = { retain: length, attributes: attributes };
                 }
-                itA.next(length);
-                itB.next(length);
+
+                if (opToPush) {
+                    pushOp(opToPush);
+                }
+                // ---- End of replacement block ----
+                itA.next(length); // These were outside the replacement block in the prompt,
+                itB.next(length); // but must be part of the insert/retain branch.
             } else if (typeA === 'retain' && typeB === 'delete') {
                 const length = Math.min(lenA, lenB);
                 pushOp({ delete: length });
