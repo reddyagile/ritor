@@ -132,8 +132,7 @@ class DebugOutput {
   private _renderDebugInfo(data: DebugData): void {
     if (!this.$outputEl) return;
 
-    // Build the outputText string. Actual newline characters ('
-') are used for formatting.
+    // Build the outputText string. Actual newline characters ('\n') are used for formatting.
     let outputText = `Timestamp: ${data.timestamp}
 `; // Literal newline
     outputText += `Event Source: ${data.eventSource}
