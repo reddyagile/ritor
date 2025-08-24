@@ -17,20 +17,6 @@ class DomEvents {
   public handleKeydown(e: KeyboardEvent) {
     this.ritor.emit('keydown', e);
 
-    // Fallback for Enter key if not handled by beforeinput or if beforeinput is not supported/fired.
-    // If beforeinput handles 'insertParagraph' and calls preventDefault, this might not run
-    // or its preventDefault might not matter.
-    // For simplicity, we can have it here. If both fire and preventDefault, it's usually fine.
-    if (e.key === 'Enter' && !e.defaultPrevented) { // Check if already handled
-      // Check for Shift+Enter for potential <br> insertion (future feature, not handled now)
-      // if (e.shiftKey) {
-      //   this.ritor.handleShiftEnterKey(); // Placeholder for future
-      //   return;
-      // }
-      e.preventDefault(); // Prevent default paragraph or div insertion by contentEditable
-      this.ritor.handleEnterKey();
-    }
-
     if (e.key === 'Backspace' && !e.defaultPrevented) {
       // This was previously handled by handleBeforeInput's deleteContentBackward.
       // If we want keydown to also trigger it as a fallback or primary:
