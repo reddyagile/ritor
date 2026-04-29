@@ -30,14 +30,14 @@ interface DebugData {
   } | null;
   domRangeToDocOutput?: DocSelection | null;
   attributesAtSelection?: OpAttributes | null; // From getFormatAt
-  typingAttributes?: OpAttributes | null;    // ADDED: From getTypingAttributes
+  typingAttributes?: OpAttributes | null; // ADDED: From getTypingAttributes
 }
 
 class DebugOutput {
   private ritor: Ritor;
   private options: ModuleOptions;
   private $outputEl: HTMLElement | null = null;
-  private lastRenderedData: string = "";
+  private lastRenderedData: string = '';
 
   constructor(ritor: Ritor, options: ModuleOptions) {
     this.ritor = ritor;
@@ -66,7 +66,7 @@ class DebugOutput {
 
     // ADDED: Listen to typingattributes:change to get the most up-to-date typing attributes
     this.ritor.on('typingattributes:change', () => {
-        this._collectAndRenderData('typingattributes:change');
+      this._collectAndRenderData('typingattributes:change');
     });
   }
 
@@ -78,7 +78,7 @@ class DebugOutput {
     if (!this.$outputEl || !docManager || !this.ritor.cursor) {
       // Optionally log an error or set a default error state for the debug output
       if (this.$outputEl) {
-          this.$outputEl.textContent = 'Error: Ritor components (docManager or cursor) not available for debug output.';
+        this.$outputEl.textContent = 'Error: Ritor components (docManager or cursor) not available for debug output.';
       }
       return;
     }
@@ -90,20 +90,23 @@ class DebugOutput {
     let attributesAtSelection: OpAttributes | null = null;
     let domRangeToDocOutput: DocSelection | null = null;
 
-    if (modelSelectionFromEvent !== undefined && (eventSource === 'document:change' || eventSource === 'init' || eventSource === 'typingattributes:change')) {
-        currentDocSelection = modelSelectionFromEvent;
+    if (
+      modelSelectionFromEvent !== undefined &&
+      (eventSource === 'document:change' || eventSource === 'init' || eventSource === 'typingattributes:change')
+    ) {
+      currentDocSelection = modelSelectionFromEvent;
     } else if (currentDomRange) {
-        currentDocSelection = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
+      currentDocSelection = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
     } else {
-        currentDocSelection = this.ritor.cursor.getDocSelection();
+      currentDocSelection = this.ritor.cursor.getDocSelection();
     }
 
     if (currentDocSelection) {
-        attributesAtSelection = this.ritor.getFormatAt(currentDocSelection);
+      attributesAtSelection = this.ritor.getFormatAt(currentDocSelection);
     }
 
     if (currentDomRange) {
-        domRangeToDocOutput = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
+      domRangeToDocOutput = this.ritor.cursor.domRangeToDocSelection(currentDomRange);
     }
 
     // Get current typing attributes
@@ -114,13 +117,15 @@ class DebugOutput {
       eventSource: eventSource,
       delta: currentDelta,
       docSelection: currentDocSelection,
-      domRange: currentDomRange ? {
-        collapsed: currentDomRange.collapsed,
-        startContainer: serializeNode(currentDomRange.startContainer),
-        startOffset: currentDomRange.startOffset,
-        endContainer: serializeNode(currentDomRange.endContainer),
-        endOffset: currentDomRange.endOffset,
-      } : null,
+      domRange: currentDomRange
+        ? {
+            collapsed: currentDomRange.collapsed,
+            startContainer: serializeNode(currentDomRange.startContainer),
+            startOffset: currentDomRange.startOffset,
+            endContainer: serializeNode(currentDomRange.endContainer),
+            endOffset: currentDomRange.endOffset,
+          }
+        : null,
       domRangeToDocOutput: domRangeToDocOutput,
       attributesAtSelection: attributesAtSelection,
       typingAttributes: currentTypingAttributes, // ADDED
@@ -170,20 +175,20 @@ ${JSON.stringify(data.attributesAtSelection, null, 2)}
 `; // Literal newline
 
     if (this.lastRenderedData !== outputText) {
-        if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
-            // For PRE/TEXTAREA, textContent handles newlines correctly.
-            this.$outputEl.textContent = outputText;
-        } else {
-            // For other elements, wrap in <pre>.
-            // First, escape HTML special characters from the entire outputText.
-            const htmlEscapedOutputText = outputText
-                .replace(/&/g, '&amp;') // Must be first
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-            // Then, replace actual newline characters (\n) in this escaped string with <br> tags for HTML rendering.
-            this.$outputEl.innerHTML = `<pre>${htmlEscapedOutputText.replace(/\n/g, '<br>')}</pre>`;
-        }
-        this.lastRenderedData = outputText;
+      if (this.$outputEl.nodeName === 'PRE' || this.$outputEl.nodeName === 'TEXTAREA') {
+        // For PRE/TEXTAREA, textContent handles newlines correctly.
+        this.$outputEl.textContent = outputText;
+      } else {
+        // For other elements, wrap in <pre>.
+        // First, escape HTML special characters from the entire outputText.
+        const htmlEscapedOutputText = outputText
+          .replace(/&/g, '&amp;') // Must be first
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        // Then, replace actual newline characters (\n) in this escaped string with <br> tags for HTML rendering.
+        this.$outputEl.innerHTML = `<pre>${htmlEscapedOutputText.replace(/\n/g, '<br>')}</pre>`;
+      }
+      this.lastRenderedData = outputText;
     }
   }
 }

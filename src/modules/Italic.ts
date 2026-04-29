@@ -10,7 +10,7 @@ class Italic extends BaseModule {
     super(ritor, {
       ...options,
       moduleName: 'italic',
-      formatAttributeKey: 'italic'
+      formatAttributeKey: 'italic',
     });
   }
 }

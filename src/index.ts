@@ -28,7 +28,6 @@ Ritor.register('debugOutput', DebugOutput); // 2. Register DebugOutput
 // <div id="output"></div> <!-- For ViewSource -->
 // <pre id="debug-output"></pre> <!-- For DebugOutput -->
 
-
 function init() {
   const ritor = new Ritor('#editable', {
     toolbar: '#toolbar', // Main toolbar container selector
@@ -38,21 +37,21 @@ function init() {
       bold: {
         moduleName: 'bold', // Ensure moduleName matches the key
         toolbar: '.r-bold', // Selector for the bold button within the main toolbar
-        shortcutKey: 'ctrl+b.prevent' // Standardized format
+        shortcutKey: 'ctrl+b.prevent', // Standardized format
       },
       italic: {
         moduleName: 'italic',
         toolbar: '.r-italic',
-        shortcutKey: 'ctrl+i.prevent'
+        shortcutKey: 'ctrl+i.prevent',
       },
       underline: {
         moduleName: 'underline',
         toolbar: '.r-underline',
-        shortcutKey: 'ctrl+u.prevent'
+        shortcutKey: 'ctrl+u.prevent',
       },
       clearFormat: {
         moduleName: 'clearFormat',
-        toolbar: '.r-clear'
+        toolbar: '.r-clear',
         // No shortcutKey defined here, but could be added
       },
       viewSource: {
@@ -63,8 +62,8 @@ function init() {
       // 3. Configure DebugOutput module
       debugOutput: {
         moduleName: 'debugOutput',
-        targetOutputSelector: '#debug-output' // Selector for the <pre> tag
-      }
+        targetOutputSelector: '#debug-output', // Selector for the <pre> tag
+      },
     },
   });
 

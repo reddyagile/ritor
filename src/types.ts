@@ -6,6 +6,8 @@ export interface ModuleOptions {
   tagName?: string; // HTML tag name, e.g., 'strong', 'em' (kept for now)
   formatAttributeKey?: string; // Key for OpAttributes, e.g., "bold", "italic"
   shortcutKey?: string; // e.g. ctrl:KeyB.prevent
+  target?: string; // Optional target selector for output views
+  targetOutputSelector?: string; // Debug output target selector
   [key: string]: any; // Allow other module-specific options
 }
 

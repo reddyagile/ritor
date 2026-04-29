@@ -10,7 +10,7 @@ class Bold extends BaseModule {
     super(ritor, {
       ...options, // This options object should now correctly contain 'toolbar'
       moduleName: 'bold', // Overrides if 'moduleName' was in options, which is fine
-      formatAttributeKey: 'bold'
+      formatAttributeKey: 'bold',
     });
   }
 }

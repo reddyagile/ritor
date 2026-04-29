@@ -4,7 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "format:check": "prettier --check \"src/**/*.{ts,scss,html}\"",
     "dev": "webpack serve --open --mode=development",
     "build:dev": "webpack --mode=development",
     "build": "webpack --mode=production"
@@ -14,12 +17,15 @@
   "devDependencies": {
     "css-loader": "^7.1.2",
     "html-webpack-plugin": "^5.6.0",
+    "jsdom": "^25.0.1",
     "mini-css-extract-plugin": "^2.9.0",
+    "prettier": "^3.3.3",
     "sass": "^1.77.4",
     "sass-loader": "^14.2.1",
     "style-loader": "^4.0.0",
     "ts-loader": "^9.5.1",
     "typescript": "^5.4.5",
+    "vitest": "^4.1.5",
     "webpack": "^5.91.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^5.0.4"

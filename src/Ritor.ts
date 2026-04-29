@@ -4,10 +4,10 @@ import defaultModules from './defaultModules';
 import EventEmitter from './EventEmitter';
 import { Module, ModuleOptions, RitorOptions, DocSelection } from './types'; // DocSelection from types
 import { Renderer } from './Renderer';
-import { isObject } from './utils';
 import { Document, OpAttributes } from './Document';
 import Cursor from './Cursor'; // Import Cursor
 import DocumentManager from './DocumentManager'; // DocumentManager still needed
+import InputController from './core/InputController';
 
 class Ritor extends EventEmitter {
   private static modules = new Map();
@@ -61,15 +61,15 @@ class Ritor extends EventEmitter {
     this.on('keydown', this.handleGlobalKeydown.bind(this));
     this.on('cursor:change', this.handleCursorChangeForTypingAttributes.bind(this));
 
-    if(this.docManager && this.renderer) {
-        this.renderer.render(this.docManager.getDocument());
+    if (this.docManager && this.renderer) {
+      this.renderer.render(this.docManager.getDocument());
     }
   }
 
   private initializeDefaultModules() {
     for (const [key, module] of Object.entries(defaultModules)) {
       if (!Ritor.modules.has(key)) {
-         Ritor.register(key, module);
+        Ritor.register(key, module);
       }
     }
   }
@@ -85,7 +85,8 @@ class Ritor extends EventEmitter {
   }
 
   private init() {
-    const domEvents = new DomEvents(this);
+    const inputController = new InputController(this);
+    const domEvents = new DomEvents(this, inputController);
     this.domEventMap.set('mouseup', domEvents.handleMouseUp.bind(domEvents));
     this.domEventMap.set('keydown', domEvents.handleKeydown.bind(domEvents));
     this.domEventMap.set('beforeinput', domEvents.handleBeforeInput.bind(domEvents));
@@ -112,7 +113,7 @@ class Ritor extends EventEmitter {
           if (!shortcutKey && moduleStaticConfig.moduleClass.hasOwnProperty('shortcutKey')) {
             shortcutKey = (moduleStaticConfig.moduleClass as any).shortcutKey;
           } else if (!shortcutKey && moduleStaticConfig.moduleClass.prototype.hasOwnProperty('shortcutKey')) {
-             shortcutKey = (moduleStaticConfig.moduleClass.prototype as any).shortcutKey;
+            shortcutKey = (moduleStaticConfig.moduleClass.prototype as any).shortcutKey;
           }
 
           const fullModuleOptions: ModuleOptions = {
@@ -137,7 +138,10 @@ class Ritor extends EventEmitter {
   }
 
   private normalizeShortcutKey(shortcut: string): string {
-    const parts = shortcut.toLowerCase().split(/[:.+]/).filter(k => k !== 'prevent' && k !== 'stop');
+    const parts = shortcut
+      .toLowerCase()
+      .split(/[:.+]/)
+      .filter((k) => k !== 'prevent' && k !== 'stop');
     parts.sort();
     return parts.join('+');
   }
@@ -207,8 +211,8 @@ class Ritor extends EventEmitter {
   }
 
   public domRangeToDocSelection(range: Range): DocSelection | null {
-      if (!this.cursor) return null;
-      return this.cursor.domRangeToDocSelection(range);
+    if (!this.cursor) return null;
+    return this.cursor.domRangeToDocSelection(range);
   }
 
   public getFormatAt(selection: DocSelection): OpAttributes {
@@ -217,8 +221,8 @@ class Ritor extends EventEmitter {
   }
 
   public clearFormatting(selection: DocSelection): void {
-      if (!this.docManager) return;
-      this.docManager.clearFormat(selection);
+    if (!this.docManager) return;
+    this.docManager.clearFormat(selection);
   }
 
   public handleCharacterInput(char: string): void {
@@ -249,7 +253,7 @@ class Ritor extends EventEmitter {
     let currentDocSelection = this.cursor.getDocSelection();
     if (currentDocSelection) {
       if (currentDocSelection.length === 0) {
-         currentDocSelection = { index: currentDocSelection.index, length: 1};
+        currentDocSelection = { index: currentDocSelection.index, length: 1 };
       }
       if (currentDocSelection.length > 0) {
         this.docManager.deleteText(currentDocSelection);
@@ -290,7 +294,7 @@ class Ritor extends EventEmitter {
     if (!this.docManager || !this.cursor) return;
     let currentDocSelection = this.cursor.getDocSelection();
     if (!currentDocSelection) {
-        currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
+      currentDocSelection = { index: this.docManager.getDocument().getDelta().length(), length: 0 };
     }
     this.docManager.insertBlockBreak(currentDocSelection);
     this._isTogglingTypingAttribute = false;

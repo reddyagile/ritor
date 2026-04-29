@@ -1,11 +1,11 @@
 // src/Document.ts
 
 export interface OpAttributes {
-  bold?: boolean | null;       // Allow null
-  italic?: boolean | null;     // Allow null
-  underline?: boolean | null;  // Allow null
+  bold?: boolean | null; // Allow null
+  italic?: boolean | null; // Allow null
+  underline?: boolean | null; // Allow null
   // Example for future: link?: string | null;
-  [key: string]: any;          // Index signature for extensibility (already present)
+  [key: string]: any; // Index signature for extensibility (already present)
 }
 
 // New type for the paragraph break marker
@@ -53,6 +53,12 @@ export class Delta {
     return this.ops.reduce((len, op) => {
       if (typeof op.insert === 'string') {
         return len + op.insert.length;
+      } else if (
+        typeof op.insert === 'object' &&
+        op.insert !== null &&
+        (op.insert as ParagraphBreakMarker).paragraphBreak === true
+      ) {
+        return len + 1;
       } else if (typeof op.delete === 'number') {
         // Deletes don't add to the length of the *resulting* document
         return len;
@@ -75,7 +81,7 @@ export class Document {
     } else if (initialContent instanceof Delta) {
       this.currentState = initialContent;
     } else {
-      this.currentState = new Delta().push({ insert: '\n' }); // Start with a newline, common practice
+      this.currentState = new Delta().push({ insert: { paragraphBreak: true } as ParagraphBreakMarker });
     }
   }
 
@@ -94,8 +100,6 @@ export class Document {
 
     // A very naive approach for now, just concatenating.
     // THIS IS NOT HOW DELTAS ARE TRULY APPLIED but serves as a starting point.
-    const newOps = this.currentState.ops.slice();
-
     // Example of a simplistic append, not a real delta application
     // A real apply would involve transforming currentOps based on change.ops
     // For instance, if change.ops has a delete, it should affect newOps.
@@ -109,8 +113,8 @@ export class Document {
 
   getText(): string {
     return this.currentState.ops
-      .filter(op => typeof op.insert === 'string')
-      .map(op => op.insert)
+      .filter((op) => typeof op.insert === 'string')
+      .map((op) => op.insert)
       .join('');
   }
 }

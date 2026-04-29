@@ -1,4 +1,4 @@
-import { INLINE_ELEMENTS } from "./constants";
+import { INLINE_ELEMENTS } from './constants';
 
 export const domUtil = {
   hasClass(el: HTMLElement, className: string) {

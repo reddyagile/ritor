@@ -10,7 +10,7 @@ class Underline extends BaseModule {
     super(ritor, {
       ...options,
       moduleName: 'underline',
-      formatAttributeKey: 'underline'
+      formatAttributeKey: 'underline',
     });
   }
 }
