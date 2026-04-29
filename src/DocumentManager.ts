@@ -170,6 +170,33 @@ class DocumentManager {
   public commandState: Map<string, boolean> = new Map();
   private typingAttributes: OpAttributesType = {};
 
+  private isParagraphBreakAtIndex(index: number): boolean {
+    if (index < 0) return false;
+    const docDelta = this.currentDocument.getDelta();
+    let currentPos = 0;
+
+    for (const op of docDelta.ops) {
+      const opLength = OpUtils.getOpLength(op);
+      if (opLength <= 0) continue;
+
+      if (index < currentPos + opLength) {
+        return typeof op.insert === 'object' && op.insert !== null && (op.insert as ParagraphBreakMarker).paragraphBreak === true;
+      }
+
+      currentPos += opLength;
+    }
+
+    return false;
+  }
+
+  private wouldCreateConsecutiveBreaks(selection: DocSelection): boolean {
+    if (selection.length > 0) return false;
+    const insertIndex = selection.index;
+    const hasBreakBefore = this.isParagraphBreakAtIndex(insertIndex - 1);
+    const hasBreakAfter = this.isParagraphBreakAtIndex(insertIndex);
+    return hasBreakBefore && hasBreakAfter;
+  }
+
   constructor(ritor: Ritor, initialDelta?: Delta) {
     this.ritor = ritor;
     const defaultInitialOps: Op[] = [{ insert: { paragraphBreak: true } as ParagraphBreakMarker }];
@@ -507,6 +534,10 @@ class DocumentManager {
   }
 
   public insertBlockBreak(selection: DocSelection): void {
+    if (this.wouldCreateConsecutiveBreaks(selection)) {
+      return;
+    }
+
     const currentDoc = this.getDocument();
     const ops: Op[] = [];
     let newCursorIndex = selection.index;
