@@ -92,7 +92,14 @@ export class Renderer {
           });
         }
       } else if (typeof op.insert === 'object' && op.insert !== null && (op.insert as any).paragraphBreak === true) {
-        this.closeCurrentBlock();
+        if (this.currentBlockElement) {
+          this.closeCurrentBlock();
+        } else if (this.$el.childNodes.length > 0) {
+          // Consecutive paragraph breaks represent explicit empty lines.
+          const emptyBlock = this.ensureCurrentBlock();
+          emptyBlock.appendChild(document.createElement('br'));
+          this.currentBlockElement = null;
+        }
       }
     }
   }

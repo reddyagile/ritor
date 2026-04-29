@@ -7,10 +7,23 @@ class SelectionMapper {
     this.editorEl = editorEl;
   }
 
+  private isPlaceholderBreak(node: Node): boolean {
+    if (node.nodeType !== Node.ELEMENT_NODE || node.nodeName.toUpperCase() !== 'BR') {
+      return false;
+    }
+
+    const parent = node.parentNode;
+    if (!parent || parent.nodeType !== Node.ELEMENT_NODE) {
+      return false;
+    }
+
+    return parent.childNodes.length === 1;
+  }
+
   private getRecursiveTextLengthForDom(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length || 0;
     if (node.nodeType === Node.ELEMENT_NODE) {
-      if (node.nodeName.toUpperCase() === 'BR') return 1;
+      if (node.nodeName.toUpperCase() === 'BR') return this.isPlaceholderBreak(node) ? 0 : 1;
       let len = 0;
       node.childNodes.forEach((child) => {
         len += this.getRecursiveTextLengthForDom(child);
