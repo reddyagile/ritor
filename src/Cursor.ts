@@ -22,6 +22,11 @@ class Cursor {
       node.childNodes.forEach(child => len += this.getRecursiveTextLengthForDom(child));
       return len;
     }
+    if (node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
+      let len = 0;
+      node.childNodes.forEach(child => len += this.getRecursiveTextLengthForDom(child));
+      return len;
+    }
     return 0;
   }
 
@@ -35,77 +40,184 @@ class Cursor {
     return length;
   }
 
+  private getBlockBeforeLength(topLevelChild: Node): number {
+    const editorEl = this.ritor.$el;
+    let index = 0;
+    const siblings = Array.from(editorEl.childNodes);
+    for (const sibling of siblings) {
+      if (sibling === topLevelChild) {
+        break;
+      }
+      index += this.getRecursiveTextLengthForDom(sibling) + 1;
+    }
+    return index;
+  }
+
+  private getTopLevelChild(node: Node): Node | null {
+    const editorEl = this.ritor.$el;
+    if (node === editorEl) {
+      return null;
+    }
+    let current: Node | null = node;
+    while (current && current.parentNode && current.parentNode !== editorEl) {
+      current = current.parentNode;
+    }
+    if (current && current.parentNode === editorEl) {
+      return current;
+    }
+    return null;
+  }
+
+  private getLocalLengthInBlock(blockNode: Node, container: Node, offset: number): number {
+    const range = document.createRange();
+    try {
+      range.setStart(blockNode, 0);
+      range.setEnd(container, offset);
+      return this.getRecursiveTextLengthForDom(range.cloneContents());
+    } catch {
+      return 0;
+    }
+  }
+
+  private domPointToDocIndex(container: Node, offset: number): number {
+    const editorEl = this.ritor.$el;
+
+    if (container === editorEl) {
+      let index = 0;
+      const childNodes = Array.from(editorEl.childNodes);
+      const clampedOffset = Math.max(0, Math.min(offset, childNodes.length));
+      for (let i = 0; i < clampedOffset; i++) {
+        index += this.getRecursiveTextLengthForDom(childNodes[i]) + 1;
+      }
+      return index;
+    }
+
+    const topLevelChild = this.getTopLevelChild(container);
+    if (!topLevelChild) {
+      return 0;
+    }
+
+    const blockPrefixLength = this.getBlockBeforeLength(topLevelChild);
+    const localLength = this.getLocalLengthInBlock(topLevelChild, container, offset);
+    return blockPrefixLength + localLength;
+  }
+
   public domRangeToDocSelection(range: Range): DocSelection | null {
     const editorEl = this.ritor.$el;
     if (!editorEl.contains(range.startContainer) || !editorEl.contains(range.endContainer)) {
       return null;
     }
-    let charCount = 0;
-    let start = -1;
-    let end = -1;
-    const nodeIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
-    let currentNode: Node | null;
-    let foundStartContainer = false;
-    let foundEndContainer = false;
 
-    while ((currentNode = nodeIterator.nextNode()) && (!foundEndContainer || end === -1)) {
-      if (currentNode.nodeType === Node.TEXT_NODE) {
-        const textLength = currentNode.textContent?.length || 0;
-        if (!foundStartContainer && currentNode === range.startContainer) {
-          start = charCount + range.startOffset;
-          foundStartContainer = true;
-        }
-        if (!foundEndContainer && currentNode === range.endContainer) {
-          end = charCount + range.endOffset;
-          foundEndContainer = true;
-        }
-        charCount += textLength;
-      } else if (currentNode.nodeType === Node.ELEMENT_NODE) {
-        if (currentNode.nodeName.toUpperCase() === 'BR') {
-          if (!foundStartContainer && range.startContainer === currentNode) {
-            start = charCount + range.startOffset;
-            foundStartContainer = true;
-          }
-          if (!foundEndContainer && range.endContainer === currentNode) {
-            end = charCount + range.endOffset;
-            foundEndContainer = true;
-          }
-          charCount += 1;
-        } else {
-          if (!foundStartContainer && currentNode === range.startContainer) {
-            start = charCount + this.getLengthTillChildForDom(currentNode, range.startOffset);
-            foundStartContainer = true;
-          }
-          if (!foundEndContainer && currentNode === range.endContainer) {
-            end = charCount + this.getLengthTillChildForDom(currentNode, range.endOffset);
-            foundEndContainer = true;
-          }
-        }
-      }
+    const start = this.domPointToDocIndex(range.startContainer, range.startOffset);
+    const end = this.domPointToDocIndex(range.endContainer, range.endOffset);
+
+    if (end < start) {
+      return { index: start, length: 0 };
     }
-    if (range.collapsed) {
-      if (start !== -1) { end = start; }
-      else {
-        const totalDocLength = this.getRecursiveTextLengthForDom(editorEl);
-        if (range.startContainer === editorEl && range.startOffset === 0) { start = 0; end = 0; }
-        else { start = totalDocLength; end = totalDocLength; }
-      }
+
+    return { index: start, length: end - start };
+  }
+
+  private getStartPointOfNode(node: Node): { node: Node; offset: number } {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return { node, offset: 0 };
     }
-    if (end !== -1 && start !== -1 && end < start) { end = start; }
-    if (start === -1 || end === -1) {
-      const currentTotalLength = this.getRecursiveTextLengthForDom(editorEl);
-      if (editorEl.childNodes.length === 0 && range.startContainer === editorEl && range.endContainer === editorEl) {
-        return { index: 0, length: 0 };
+    if (node.nodeType === Node.ELEMENT_NODE && node.nodeName.toUpperCase() === 'BR') {
+      const parent = node.parentNode;
+      const index = parent ? Array.from(parent.childNodes).indexOf(node as ChildNode) : -1;
+      if (parent && index >= 0) {
+        return { node: parent, offset: index };
       }
-      if (start !== -1 && end === -1) {
-        end = currentTotalLength;
-        if (start > end) start = end;
-        return { index: start, length: Math.max(0, end - start) };
-      }
-      console.warn('Could not map DOM range to document selection accurately. Range:', range, 'Calculated:', { start, end }, 'TotalLen:', currentTotalLength);
-      return { index: (start !== -1 ? start : currentTotalLength), length: 0 };
+      return { node, offset: 0 };
     }
-    return { index: start, length: Math.max(0, end - start) };
+    const firstChild = node.firstChild;
+    if (!firstChild) {
+      return { node, offset: 0 };
+    }
+    return this.getStartPointOfNode(firstChild);
+  }
+
+  private getEndPointOfNode(node: Node): { node: Node; offset: number } {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return { node, offset: node.textContent?.length || 0 };
+    }
+    if (node.nodeType === Node.ELEMENT_NODE && node.nodeName.toUpperCase() === 'BR') {
+      const parent = node.parentNode;
+      const index = parent ? Array.from(parent.childNodes).indexOf(node as ChildNode) : -1;
+      if (parent && index >= 0) {
+        return { node: parent, offset: index + 1 };
+      }
+      return { node, offset: 1 };
+    }
+    const lastChild = node.lastChild;
+    if (!lastChild) {
+      return { node, offset: node.childNodes.length };
+    }
+    return this.getEndPointOfNode(lastChild);
+  }
+
+  private mapLocalIndexToDomPoint(node: Node, localIndex: number): { node: Node; offset: number } {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const textLen = node.textContent?.length || 0;
+      const clamped = Math.max(0, Math.min(localIndex, textLen));
+      return { node, offset: clamped };
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE && node.nodeName.toUpperCase() === 'BR') {
+      const parent = node.parentNode;
+      const index = parent ? Array.from(parent.childNodes).indexOf(node as ChildNode) : -1;
+      if (parent && index >= 0) {
+        return { node: parent, offset: localIndex <= 0 ? index : index + 1 };
+      }
+      return { node, offset: localIndex <= 0 ? 0 : 1 };
+    }
+
+    let remaining = localIndex;
+    const children = Array.from(node.childNodes);
+
+    for (const child of children) {
+      const childLen = this.getRecursiveTextLengthForDom(child);
+      if (remaining <= childLen) {
+        return this.mapLocalIndexToDomPoint(child, remaining);
+      }
+      remaining -= childLen;
+    }
+
+    return this.getEndPointOfNode(node);
+  }
+
+  private mapDocIndexToDomPoint(targetIndex: number): { node: Node; offset: number } {
+    const editorEl = this.ritor.$el;
+    const childNodes = Array.from(editorEl.childNodes);
+
+    if (childNodes.length === 0) {
+      return { node: editorEl, offset: 0 };
+    }
+
+    let currentIndex = 0;
+    for (let i = 0; i < childNodes.length; i++) {
+      const block = childNodes[i];
+      const blockTextLen = this.getRecursiveTextLengthForDom(block);
+      const blockStart = currentIndex;
+      const blockEnd = blockStart + blockTextLen;
+
+      if (targetIndex <= blockEnd) {
+        return this.mapLocalIndexToDomPoint(block, targetIndex - blockStart);
+      }
+
+      const separatorIndex = blockEnd + 1;
+      if (targetIndex === separatorIndex) {
+        const nextBlock = childNodes[i + 1];
+        if (nextBlock) {
+          return this.getStartPointOfNode(nextBlock);
+        }
+        return this.getEndPointOfNode(block);
+      }
+
+      currentIndex = separatorIndex;
+    }
+
+    return this.getEndPointOfNode(childNodes[childNodes.length - 1]);
   }
 
   public docSelectionToDomRange(docSelection: DocSelection): Range | null {
@@ -113,88 +225,25 @@ class Cursor {
     if (!editorEl) return null;
 
     const range = document.createRange();
-    let charCount = 0;
-    let startNode: Node | null = null;
-    let startOffset = 0;
-    let endNode: Node | null = null;
-    let endOffset = 0;
-    let foundStart = false;
-    let foundEnd = false;
-    const targetStartIndex = docSelection.index;
-    const targetEndIndex = docSelection.index + docSelection.length;
+    const targetStartIndex = Math.max(0, docSelection.index);
+    const targetEndIndex = Math.max(targetStartIndex, docSelection.index + docSelection.length);
 
-    if (targetStartIndex === 0 && targetEndIndex === 0) {
-        let focusNode: Node | null = editorEl.firstChild;
-        // let isEmpty = !focusNode; // This variable is not used
-
-        if (focusNode && editorEl.childNodes.length === 1 && focusNode.nodeName === 'BR') {
-            range.setStartBefore(focusNode); range.collapse(true); return range;
-        } else if (!focusNode || (focusNode.nodeType !== Node.TEXT_NODE && focusNode.nodeName !== 'BR')) {
-            const tempText = document.createTextNode('');
-            if (focusNode) { editorEl.insertBefore(tempText, focusNode); }
-            else { editorEl.appendChild(tempText); }
-            focusNode = tempText;
-            range.setStart(focusNode, 0); range.collapse(true); return range;
-        }
-    }
-
-    const nodeIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
-    let currentNode: Node | null;
-
-    while ((currentNode = nodeIterator.nextNode())) {
-      let nodeLength = 0;
-      if (currentNode.nodeType === Node.TEXT_NODE) {
-        nodeLength = currentNode.textContent?.length || 0;
-      } else if (currentNode.nodeType === Node.ELEMENT_NODE && currentNode.nodeName.toUpperCase() === 'BR') {
-        nodeLength = 1;
-      } else { continue; }
-
-      const endCharCountAfterThisNode = charCount + nodeLength;
-      if (!foundStart && targetStartIndex >= charCount && targetStartIndex <= endCharCountAfterThisNode) {
-        startNode = currentNode; startOffset = targetStartIndex - charCount; foundStart = true;
-        if (docSelection.length === 0) { endNode = startNode; endOffset = startOffset; foundEnd = true; break; }
-      }
-      if (docSelection.length > 0 && !foundEnd && targetEndIndex >= charCount && targetEndIndex <= endCharCountAfterThisNode) {
-        endNode = currentNode; endOffset = targetEndIndex - charCount; foundEnd = true;
-      }
-      charCount = endCharCountAfterThisNode;
-      if (foundStart && foundEnd) break;
-    }
-
-    if (!foundStart) {
-        charCount = 0;
-        const endIterator = document.createNodeIterator(editorEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, null);
-        let lastCountableNode: Node | null = null;
-        while(currentNode = endIterator.nextNode()) {
-            if (currentNode.nodeType === Node.TEXT_NODE) {
-                lastCountableNode = currentNode; charCount += currentNode.textContent?.length || 0;
-            } else if (currentNode.nodeName === 'BR') {
-                lastCountableNode = currentNode; charCount += 1;
-            }
-        }
-        startNode = lastCountableNode || editorEl.firstChild || editorEl;
-        startOffset = lastCountableNode ? (lastCountableNode.nodeType === Node.TEXT_NODE ? (lastCountableNode.textContent?.length || 0) : 1) : 0;
-    }
-    if (!foundEnd) { endNode = startNode; endOffset = startOffset; }
-
-    if (startNode && endNode) {
+    try {
+      const startPoint = this.mapDocIndexToDomPoint(targetStartIndex);
+      const endPoint = this.mapDocIndexToDomPoint(targetEndIndex);
+      range.setStart(startPoint.node, startPoint.offset);
+      range.setEnd(endPoint.node, endPoint.offset);
+      return range;
+    } catch (e) {
+      console.warn('Could not map document selection to DOM range accurately (fallback).', docSelection, e);
       try {
-        const setRangePoint = (pointSetter: (node: Node, offset: number) => void, node: Node, offset: number) => {
-          if (node.nodeName === 'BR') {
-            const parent = node.parentNode;
-            const brIndexInParent = Array.from(parent?.childNodes || []).indexOf(node as ChildNode);
-            if (parent && brIndexInParent !== -1) { pointSetter(parent, offset === 0 ? brIndexInParent : brIndexInParent + 1); }
-            else { pointSetter(node, 0); }
-          } else { pointSetter(node, offset); }
-        };
-        setRangePoint(range.setStart.bind(range), startNode, startOffset);
-        setRangePoint(range.setEnd.bind(range), endNode, endOffset);
-        return range;
-      } catch (e) { console.error("Error setting range:", e); /* fallback below */ }
+        range.selectNodeContents(editorEl);
+        range.collapse(true);
+      } catch {
+        return null;
+      }
+      return range;
     }
-    console.warn('Could not map document selection to DOM range accurately (final fallback).', docSelection);
-    try { range.selectNodeContents(editorEl); range.collapse(true); } catch (e) { return null; }
-    return range;
   }
 
   // --- End of methods moved from DocumentManager ---
