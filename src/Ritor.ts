@@ -31,7 +31,7 @@ class Ritor extends EventEmitter {
     if (!targetElem) throw new Error('Target element not found.');
     this.$el = targetElem;
 
-    const defaultInternalOptions: RitorOptions = { modules: {} };
+    const defaultInternalOptions: RitorOptions = { modules: {}, allowEnterKey: true };
     this.options = Object.assign({}, defaultInternalOptions, userProvidedOptions);
     this.options.modules = this.options.modules || {};
 
@@ -298,6 +298,10 @@ class Ritor extends EventEmitter {
     }
     this.docManager.insertBlockBreak(currentDocSelection);
     this._isTogglingTypingAttribute = false;
+  }
+
+  public isEnterKeyAllowed(): boolean {
+    return this.options.allowEnterKey !== false;
   }
 
   public getTypingAttributes(): OpAttributes {

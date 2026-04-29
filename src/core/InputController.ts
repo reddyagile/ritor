@@ -13,7 +13,9 @@ class InputController {
     // Fallback for Enter if beforeinput is unavailable or did not run.
     if (e.key === 'Enter' && !e.defaultPrevented) {
       e.preventDefault();
-      this.ritor.handleEnterKey();
+      if (this.ritor.isEnterKeyAllowed()) {
+        this.ritor.handleEnterKey();
+      }
     }
 
     setTimeout(() => {
@@ -26,7 +28,9 @@ class InputController {
 
     if (e.inputType === 'insertParagraph') {
       e.preventDefault();
-      this.ritor.handleEnterKey();
+      if (this.ritor.isEnterKeyAllowed()) {
+        this.ritor.handleEnterKey();
+      }
       return;
     }
 

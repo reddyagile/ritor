@@ -19,6 +19,7 @@ export interface RitorOptions {
   toolbar?: string;
   placeholder?: string;
   initialValue?: string;
+  allowEnterKey?: boolean;
   modules?: Modules;
 }
 
